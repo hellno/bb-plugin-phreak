@@ -1,11 +1,11 @@
-// The thread digest and its updates (SPEC §4.4), the four Realtime function
+// The thread digest and its updates (SPEC §4.4), the five Realtime function
 // tools and every bb call behind them. Lookups beyond the chat itself go to a
 // hidden fork of the thread, so bb's own agent does the reading. Mutations only
 // ever take the session's threadId; the model never picks the thread.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Delivery } from "./protocol";
 
-export type ActionTool = "send_to_chat" | "stop_agent";
+export type ActionTool = "send_to_chat" | "stop_agent" | "answer_question";
 export type Outcome = { delivery: Delivery; detail?: string };
 
 const DATA = "[thread data]";
@@ -24,6 +24,12 @@ const LOOKUP_PREAMBLE =
 function tool(name: string, description: string, properties: Record<string, object> = {}, required: string[] = []) {
   return { type: "function", name, description, parameters: { type: "object", properties, required } };
 }
+
+const ANSWER_FIELDS = {
+  questionId: { type: "string", description: "The question's id, or its number." },
+  selected: { type: "array", items: { type: "string" }, description: "Chosen options, by label or value." },
+  freeText: { type: "string", description: "The user's own answer, where free text is allowed." },
+};
 
 export const TOOLS = [
   tool(
@@ -47,6 +53,12 @@ export const TOOLS = [
     ["text"],
   ),
   tool("stop_agent", "Stop the agent's current turn in this thread. Only when the user explicitly asks to stop it."),
+  tool(
+    "answer_question",
+    "Answer the question the agent is waiting on in this thread, once the user has decided. Include every question that needs an answer.",
+    { answers: { type: "array", items: { type: "object", properties: ANSWER_FIELDS, required: ["questionId"] } } },
+    ["answers"],
+  ),
 ];
 
 // ---- Timeline
@@ -238,11 +250,80 @@ export class Lookup {
   }
 }
 
-// ---- Actions: send and stop
+// ---- Pending questions
+
+/** The fields read from a pending interaction; bb's list and event types differ. */
+export type Interaction = { id: string; status: string; payload: { kind: string }; origin?: { kind: string } };
+type Question = { id: string; prompt: string; shortLabel?: string; multiSelect: boolean; allowFreeText: boolean; required?: boolean; options?: { value: string; label: string; description?: string }[] };
+/** `viaRespond`: a card of bb's ask-user-question plugin, which is answered through respond, not resolve. */
+export type PendingQuestion = { id: string; viaRespond: boolean; questions: Question[] };
+type Answer = { selected: string[] } | { selected: string[]; freeText: string };
+export type PreparedAnswer = { pending: PendingQuestion; answers: Record<string, Answer>; summary: string };
+
+/** A provider's native question or an ask-user-question card; null for approvals and other requests. */
+export function asQuestion(interaction: Interaction): PendingQuestion | null {
+  const payload = interaction.payload as { kind: string; questions?: Question[]; data?: { questions?: unknown } | null };
+  if (interaction.status !== "pending") return null;
+  if (payload.kind === "user_question") return { id: interaction.id, viaRespond: false, questions: payload.questions ?? [] };
+  const plugin = (interaction.origin as { pluginId?: string } | undefined)?.pluginId === "ask-user-question" ? payload.data?.questions : null;
+  return Array.isArray(plugin) ? { id: interaction.id, viaRespond: true, questions: plugin as Question[] } : null;
+}
+
+export async function loadQuestion(bb: BbPluginApi, threadId: string): Promise<PendingQuestion | null> {
+  return (await bb.sdk.threads.interactions.list({ threadId })).map(asQuestion).find((question) => question !== null) ?? null;
+}
+
+export function questionItem(pending: PendingQuestion): string {
+  const questions = pending.questions.map((q, i) => {
+    const rules = [q.multiSelect ? "multi-select" : "single-select", q.allowFreeText ? "free text allowed" : "no free text", q.required === false ? "optional" : ""];
+    const options = (q.options ?? []).map((o) => `\n- ${o.value}: ${o.label}${o.description ? ` — ${o.description}` : ""}`);
+    return `Question ${i + 1} (id ${q.id}; ${rules.filter(Boolean).join(", ")}): ${q.prompt}${options.join("")}`;
+  });
+  return clip(`${DATA} The agent is waiting for the user to answer in bb:\n${questions.join("\n")}`, MAX_MESSAGE_CHARS);
+}
+
+/** answer_question's arguments checked against the question pending now, labels mapped to values; or what is wrong. */
+export async function prepareAnswer(bb: BbPluginApi, threadId: string, raw: unknown): Promise<PreparedAnswer | string> {
+  const pending = await loadQuestion(bb, threadId);
+  if (!pending) return "no question is pending in this thread.";
+  const answers: Record<string, Answer> = {};
+  const summary: string[] = [];
+  for (const entry of Array.isArray(raw) ? (raw as { questionId?: unknown; selected?: unknown; freeText?: unknown }[]) : []) {
+    const id = String(entry?.questionId ?? "");
+    const q = pending.questions.find((question) => question.id === id) ?? pending.questions[Number(id) - 1];
+    if (!q) return `there is no question "${id}".`;
+    const name = q.shortLabel ?? q.prompt;
+    const selected: string[] = [];
+    for (const choice of Array.isArray(entry.selected) ? entry.selected.map(String) : []) {
+      const option = q.options?.find((o) => o.value === choice || o.label.toLowerCase() === choice.trim().toLowerCase());
+      if (!option) return `"${choice}" is not an option of "${name}".`;
+      if (!selected.includes(option.value)) selected.push(option.value);
+    }
+    if (selected.length > 1 && !q.multiSelect) return `"${name}" takes only one option.`;
+    const freeText = typeof entry.freeText === "string" ? entry.freeText.trim() : "";
+    if (freeText && !q.allowFreeText) return `"${name}" takes no free text, only its options.`;
+    if (selected.length === 0 && !freeText) continue;
+    answers[q.id] = freeText ? { selected, freeText } : { selected };
+    const labels = selected.map((value) => q.options?.find((o) => o.value === value)?.label);
+    summary.push(`${name}: ${[...labels, freeText].filter(Boolean).join(", ")}`);
+  }
+  const missing = pending.questions.find((q) => q.required !== false && !answers[q.id]);
+  if (missing) return `"${missing.shortLabel ?? missing.prompt}" still needs an answer.`;
+  if (summary.length === 0) return "no answers were given.";
+  return { pending, answers, summary: summary.join("; ") };
+}
+
+// ---- Actions: send, stop and answer
 
 /** bb answering 4xx means it refused; no answer, a timeout or a 5xx means it may have happened. */
-export async function dispatchAction(bb: BbPluginApi, threadId: string, tool: ActionTool, text: string, now: boolean): Promise<Outcome> {
+export async function dispatchAction(bb: BbPluginApi, threadId: string, tool: ActionTool, text: string, now: boolean, answer?: PreparedAnswer): Promise<Outcome> {
   try {
+    if (answer) {
+      const { id: interactionId, viaRespond } = answer.pending;
+      if (viaRespond) await bb.sdk.threads.interactions.respond({ threadId, interactionId, value: { answers: answer.answers } });
+      else await bb.sdk.threads.interactions.resolve({ threadId, interactionId, resolution: { kind: "user_answer", answers: answer.answers } });
+      return { delivery: "sent" };
+    }
     if (tool === "stop_agent") {
       await bb.sdk.threads.stop({ threadId });
       // stop resolves once the interrupt was attempted; only an idle thread has really stopped.

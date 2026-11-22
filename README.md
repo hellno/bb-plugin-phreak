@@ -16,6 +16,9 @@ into the thread.
   or "pass that on" composes a clear message from what you decided and sends
   it. "Tell it now" steers a running turn. "Stop it" stops the agent. The panel
   shows the exact text of every send.
+- **Talks questions through.** When the agent asks you a multiple-choice
+  question in the chat, Phreak sees it. Discuss it, then say what you picked, and
+  Phreak answers the card for you.
 - **Runs on your ChatGPT plan.** The voice comes from OpenAI Realtime through
   the Codex sign-in, via the
   [`codex-realtime`](https://github.com/gpambrozio/bb-plugins/tree/main/codex-realtime)

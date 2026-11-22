@@ -76,7 +76,7 @@ Files:
 | --- | --- |
 | `protocol.ts` | Types and constants shared by browser and server. No logic. |
 | `server.ts` | Plugin entry, the browser WebSocket route, the upstream Realtime socket, session identity, tool dispatch. |
-| `tools.ts` | Thread digest, the four tools, and the bb calls behind them. |
+| `tools.ts` | Thread digest, the five tools, and the bb calls behind them. |
 | `app.tsx` | The panel: Start/End, mute, status, captions, delivery results. Ends the session on hide or unmount. |
 | `audio.ts` | Mic capture, resampling, playback queue, played-sample counting, cleanup. |
 
@@ -204,7 +204,7 @@ unchecked. Usage counts against the ChatGPT plan.
 ### 4.5 Tools
 
 Phreak reuses bb's agents instead of hand-writing read tools. The voice model
-has four tools:
+has five tools:
 
 | Tool | What it does | Changes the thread |
 | --- | --- | --- |
@@ -212,11 +212,16 @@ has four tools:
 | `ask_agent(question)` | Hands a lookup to a hidden fork of this thread, as side chat does: files, git, other threads, anything the agent can read. The fork is created on first use (`threads.fork`, hidden) and reused. One lookup runs at a time: `threads.wait` (3-minute timeout), then `threads.output`. If the fork times out or stops on a question or permission, Phreak stops and archives it, and the next lookup starts a fresh fork. Answers take an agent turn, about 10 to 60 s. | no |
 | `send_to_chat(text, now?)` | Sends `text` to this thread: `queue-if-active` by default, `steer-if-active` when `now`. A steer bb accepts is reported as `submitted`, because the agent may still decline it; there is no automatic fallback. | yes |
 | `stop_agent()` | `threads.stop` on this thread, then a status check: `stopped` once idle, otherwise `stopping`. | yes |
+| `answer_question(answers)` | Answers the agent's pending question card on this thread, the same way clicking it does. Claude Code and Codex questions use `threads.interactions.resolve`; bb's ask-user-question cards use `interactions.respond`. Questions can be given by number and options by label. Unknown options, extra choices on single-choice questions, and missing required answers are refused back to the model. Permission requests are not answered; they stay in bb. | yes |
 
 - **Mutations** always target the session's own `threadId`; the model cannot
   choose another thread.
 - **Status:** the digest updates (section 4.4) carry the thread's status, so
   "is it done?" needs no tool.
+- **Questions:** a pending question card joins the conversation as thread
+  data, both at Start and when one appears mid-session. It includes the prompt,
+  the options, and whether several answers or free text are allowed. You can
+  talk it through, then say what you chose.
 - **Slow answers:** the voice model says it is checking before it calls
   `ask_agent`, and you can keep talking while the fork works. The answer is
   delivered whenever it arrives.
@@ -238,7 +243,8 @@ has four tools:
 
 ### 4.6 Sending and stopping
 
-The voice model decides when to call `send_to_chat` and `stop_agent`, from the
+The voice model decides when to call `send_to_chat`, `stop_agent` and
+`answer_question`, from the
 conversation, in whatever words you use: "send that", "yeah, push it over",
 "can you pass that on?". There are no phrase lists.
 

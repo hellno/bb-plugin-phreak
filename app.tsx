@@ -1,5 +1,5 @@
 // Phreak's panel (SPEC §4.7): Start/End, mute, status, live captions and one
-// result line per send or stop, for the thread it sits beside.
+// result line per send, stop or answer, for the thread it sits beside.
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import {
   definePluginApp,
@@ -174,6 +174,8 @@ const DELIVERY_LABEL: Record<Delivery, string> = {
   failed: "Failed",
 };
 
+const TOOL_LABEL: Record<ActionMessage["tool"], string> = { send_to_chat: "message", stop_agent: "stop", answer_question: "answer" };
+
 const BUTTON =
   "inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 const PRIMARY = "bg-foreground text-background hover:bg-foreground/90";
@@ -272,7 +274,7 @@ function ActionLine({ action, threadId }: { action: ActionMessage; threadId: str
         <span className={failed ? "font-medium text-destructive" : "font-medium text-foreground"}>
           {DELIVERY_LABEL[action.delivery]}
         </span>
-        {` · ${action.tool === "send_to_chat" ? "message" : "stop"} → `}
+        {` · ${TOOL_LABEL[action.tool]} → `}
         {action.threadId === threadId ? "this thread" : <code>{action.threadId}</code>}
       </div>
       {action.text ? <p className="mt-1 whitespace-pre-wrap break-words">{action.text}</p> : null}

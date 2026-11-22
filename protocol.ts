@@ -20,7 +20,7 @@ export const SESSION_PATH = "session"; // route "/session" → /api/v1/plugins/p
 export type SessionState = "connecting" | "listening" | "thinking" | "speaking" | "reconnecting";
 
 /**
- * Outcome of a send or stop, shown verbatim in the panel.
+ * Outcome of a send, stop or answer, shown verbatim in the panel.
  * `submitted`: a steer bb accepted; the agent may still decline it.
  * `stopping`: bb accepted the stop but the thread has not settled yet.
  */
@@ -34,7 +34,7 @@ export type ServerMessage =
   | { type: "interrupt" }
   /** `text` is the full text so far for this item. An empty user caption at commit reserves its place. */
   | { type: "caption"; role: "user" | "assistant"; itemId: string; text: string; final: boolean }
-  | { type: "action"; tool: "send_to_chat" | "stop_agent"; delivery: Delivery; text?: string; threadId: string; detail?: string }
+  | { type: "action"; tool: "send_to_chat" | "stop_agent" | "answer_question"; delivery: Delivery; text?: string; threadId: string; detail?: string }
   /** A problem the session survives. */
   | { type: "error"; message: string }
   /** Terminal: the session is over and the socket closes. */
