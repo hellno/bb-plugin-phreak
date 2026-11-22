@@ -1,5 +1,5 @@
-// The thread digest and its updates, the five Realtime function tools and every
-// bb call behind them. Lookups beyond the chat go to a fresh hidden fork of the
+// The thread digest and its updates, the Realtime function tools and every bb
+// call behind them. Lookups beyond the chat go to a fresh hidden fork of the
 // thread, so bb's own agent does the reading. Actions only ever take the
 // session's threadId; the model never picks the thread.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
@@ -58,6 +58,13 @@ export const TOOLS = [
     },
     ["text"],
   ),
+  tool("unsend_message", "Withdraw the latest message you queued in this thread, if it is still waiting to be delivered."),
+  tool(
+    "draft_message",
+    "Put a message into this thread's chat box instead of sending it; the user edits and sends it themselves.",
+    { text: { type: "string", description: "The exact text to draft." } },
+    ["text"],
+  ),
   tool("stop_agent", "Stop the agent's current turn in this thread."),
   tool(
     "answer_question",
@@ -67,6 +74,15 @@ export const TOOLS = [
       answers: { type: "object", description: "Answers keyed by exact question id.", additionalProperties: ANSWER },
     },
     ["interactionId", "answers"],
+  ),
+  tool(
+    "start_thread",
+    "Start a new thread, with its own agent, in this thread's project.",
+    {
+      prompt: { type: "string", description: "The new thread's first message, complete and self-contained." },
+      title: { type: "string", description: "A short title." },
+    },
+    ["prompt"],
   ),
 ];
 
@@ -255,30 +271,21 @@ export async function pendingQuestionItems(bb: BbPluginApi, threadId: string): P
   return cards.flatMap((card) => questionItem(card) ?? []);
 }
 
-// ---- Actions: send, stop and answer
+// ---- Actions
 
-/** One send, stop or answer on the session's thread. `live` is checked right before bb is asked to act, with nothing awaited in between. */
-export async function act(bb: BbPluginApi, threadId: string, tool: ActionTool, args: Record<string, unknown>, live: () => boolean): Promise<ActionResult> {
-  const answer = tool === "answer_question" ? await prepareAnswer(bb, threadId, args) : null;
-  if (answer && !("run" in answer)) return answer;
-  const message = typeof args.text === "string" ? args.text.trim() : "";
-  if (tool === "send_to_chat" && !message) return { status: "refused", detail: "the message was empty" };
-  const text = answer?.text ?? (message || undefined);
+/** What actions touch: the session's own thread, the messages it queued there (oldest first) and its panel's composer. */
+export type ActionTarget = { threadId: string; queued: { id: string; text: string }[]; draft: (text: string) => void };
+/** A refusal, or the action ready to go: `run` asks bb (or the panel) first, before awaiting anything. */
+type Prepared = ActionResult | { text?: string; run: () => Promise<ActionResult> };
+
+/** One action on the session's thread. `live` is checked right before bb is asked to act, with nothing awaited in between. */
+export async function act(bb: BbPluginApi, target: ActionTarget, tool: ActionTool, args: Record<string, unknown>, live: () => boolean): Promise<ActionResult> {
+  const action = await prepare(bb, target, tool, args).catch((error: unknown): ActionResult => ({ status: "refused", detail: errorMessage(error) }));
+  if (!("run" in action)) return action;
+  const { text } = action;
   if (!live()) return { status: "refused", text, detail: "the session ended or reconnected" };
   try {
-    if (answer) {
-      const { status } = await answer.run();
-      return { status: ANSWER_STATUS[status] ?? status, text };
-    }
-    if (tool === "stop_agent") {
-      await bb.sdk.threads.stop({ threadId });
-      // stop resolves once the interrupt was attempted; the thread's status says whether it took.
-      return { status: (await bb.sdk.threads.get({ threadId }).catch(() => null))?.status ?? "stop requested" };
-    }
-    const mode = args.now === true ? "steer-if-active" : "queue-if-active";
-    const sent = await bb.sdk.threads.send({ threadId, mode, input: [{ type: "text", text: message, mentions: [] }] });
-    const waiting = sent.delivery === "queued" ? sent.queuedMessage.waitingOn : null;
-    return { status: sent.delivery, text, ...(waiting ? { detail: `waiting on ${waiting.kind}` } : {}) };
+    return await action.run();
   } catch (error) {
     // bb answering 4xx means it refused; no answer, a timeout or a 5xx means it may have happened.
     const status = (error as { status?: unknown } | null)?.status;
@@ -287,8 +294,65 @@ export async function act(bb: BbPluginApi, threadId: string, tool: ActionTool, a
   }
 }
 
+async function prepare(bb: BbPluginApi, { threadId, queued, draft }: ActionTarget, tool: ActionTool, args: Record<string, unknown>): Promise<Prepared> {
+  const text = typeof args.text === "string" ? args.text.trim() : "";
+  const empty = { status: "refused", detail: "the message was empty" };
+  switch (tool) {
+    case "send_to_chat":
+      return !text ? empty : {
+        text,
+        run: async () => {
+          const sent = await bb.sdk.threads.send({ threadId, mode: args.now === true ? "steer-if-active" : "queue-if-active", input: [{ type: "text", text, mentions: [] }] });
+          if (sent.delivery === "sent") return { status: "sent", text };
+          queued.push({ id: sent.queuedMessage.id, text });
+          const waiting = sent.queuedMessage.waitingOn;
+          return { status: "queued", text, ...(waiting ? { detail: `waiting on ${waiting.kind}` } : {}) };
+        },
+      };
+    case "unsend_message": {
+      const rows = await bb.sdk.threads.queuedMessages.list({ threadId });
+      // A claimed row is already being delivered.
+      const mine = [...queued].reverse().find((q) => rows.some((row) => row.id === q.id && row.state !== "claimed"));
+      if (!mine) return { status: "refused", detail: "nothing Phreak queued on this thread is still waiting" };
+      return {
+        text: mine.text,
+        run: async () => {
+          await bb.sdk.threads.queuedMessages.delete({ threadId, queuedMessageId: mine.id });
+          return { status: "withdrawn", text: mine.text };
+        },
+      };
+    }
+    case "draft_message":
+      return !text ? empty : { text, run: async () => (draft(text), { status: "drafted", text }) };
+    case "stop_agent":
+      return {
+        run: async () => {
+          await bb.sdk.threads.stop({ threadId });
+          // stop resolves once the interrupt was attempted; the thread's status says whether it took.
+          return { status: (await bb.sdk.threads.get({ threadId }).catch(() => null))?.status ?? "stop requested" };
+        },
+      };
+    case "answer_question":
+      return prepareAnswer(bb, threadId, args);
+    case "start_thread": {
+      const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+      if (!prompt) return { status: "refused", detail: "the prompt was empty" };
+      const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : undefined;
+      const { projectId } = await bb.sdk.threads.get({ threadId });
+      return {
+        text: prompt,
+        run: async () => {
+          // A visible thread of its own, not a child of this one; bb picks the environment, provider and model.
+          const thread = await bb.sdk.threads.spawn({ projectId, environment: { type: "project-default" }, prompt, title });
+          return { status: thread.status, text: prompt, detail: thread.title ?? thread.titleFallback ?? thread.id, threadId: thread.id };
+        },
+      };
+    }
+  }
+}
+
 /** bb validates a native question's answers itself; an ask-user-question card settles before its plugin reads them, so those are checked here. */
-async function prepareAnswer(bb: BbPluginApi, threadId: string, args: Record<string, unknown>): Promise<ActionResult | { text: string; run: () => Promise<Interaction> }> {
+async function prepareAnswer(bb: BbPluginApi, threadId: string, args: Record<string, unknown>): Promise<Prepared> {
   const interactionId = typeof args.interactionId === "string" ? args.interactionId : "";
   const answers = (typeof args.answers === "object" && args.answers !== null ? args.answers : {}) as Answers;
   const card = interactionId ? await bb.sdk.threads.interactions.get({ threadId, interactionId }).catch(() => null) : null;
@@ -313,12 +377,15 @@ async function prepareAnswer(bb: BbPluginApi, threadId: string, args: Record<str
     summary.push(`${question?.shortLabel ?? question?.prompt ?? id}: ${[...labels.map((label, i) => label ?? selected[i]), free].filter(Boolean).join(", ")}`);
   }
   const value = { answers } as Parameters<Threads["interactions"]["respond"]>[0]["value"];
+  const text = summary.join("; ");
   return {
-    text: summary.join("; "),
-    run: () =>
-      native
-        ? bb.sdk.threads.interactions.resolve({ threadId, interactionId, resolution: { kind: "user_answer", answers } })
-        : bb.sdk.threads.interactions.respond({ threadId, interactionId, value }),
+    text,
+    run: async () => {
+      const { status } = native
+        ? await bb.sdk.threads.interactions.resolve({ threadId, interactionId, resolution: { kind: "user_answer", answers } })
+        : await bb.sdk.threads.interactions.respond({ threadId, interactionId, value });
+      return { status: ANSWER_STATUS[status] ?? status, text };
+    },
   };
 }
 

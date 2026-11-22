@@ -13,14 +13,15 @@ export const SESSION_PATH = "session"; // → /api/v1/plugins/phreak/http/sessio
 /** `thinking` is sent when the user stops speaking; the panel measures latency from it to the first audible output. */
 export type SessionState = "connecting" | "listening" | "thinking" | "speaking" | "reconnecting";
 
-export type ActionTool = "send_to_chat" | "stop_agent" | "answer_question";
+export type ActionTool = "send_to_chat" | "unsend_message" | "draft_message" | "stop_agent" | "answer_question" | "start_thread";
 
 /**
- * What came of a send, stop or answer, given as is to the model and the panel. `status` is bb's: the delivery
- * (sent, queued), the thread's status after a stop, or the card's (submitted, answered, interrupted). Otherwise
- * it is refused (bb was not asked), failed (bb refused) or unknown (bb did not answer).
+ * What came of an action, given as is to the model and the panel. `status` is bb's where it has one: the delivery
+ * (sent, queued), the thread's status after a stop or of a new thread, or the card's (submitted, answered,
+ * interrupted); else withdrawn or drafted. Otherwise it is refused (bb was not asked), failed (bb refused) or
+ * unknown (bb did not answer). `threadId` is the thread start_thread started.
  */
-export type ActionResult = { status: string; text?: string; detail?: string };
+export type ActionResult = { status: string; text?: string; detail?: string; threadId?: string };
 
 export type ServerMessage =
   | { type: "status"; state: SessionState }
@@ -31,6 +32,8 @@ export type ServerMessage =
   /** `text` is the full text so far for this item. An empty user caption at commit reserves its place. */
   | { type: "caption"; role: "user" | "assistant"; itemId: string; text: string; final: boolean }
   | ({ type: "action"; tool: ActionTool } & ActionResult)
+  /** Text for the panel to add to its thread's composer, after any draft there. */
+  | { type: "draft"; text: string }
   /** A problem the session survives. */
   | { type: "error"; message: string }
   /** Terminal: the session is over and the socket closes. */

@@ -15,6 +15,11 @@ into the thread.
   or "pass that on" sends a message composed from what you decided; "tell it
   now" delivers it into the running turn; "stop it" stops the agent. The panel
   shows bb's status and the exact text of every action.
+- **Takes it back, drafts, or starts fresh.** It can withdraw a message it
+  queued that hasn't started, put a message in the chat box for you to edit
+  instead of sending it, or start a new thread in the same project.
+- **Tells you when it's done.** When the agent finishes, fails or asks you
+  something, Phreak says so in one short line.
 - **Talks questions through.** When the agent asks you a question card, Phreak
   sees it. Discuss it, say what you picked, and Phreak answers the card.
 - **Runs on your ChatGPT plan.** The voice comes from OpenAI Realtime through
@@ -24,8 +29,9 @@ into the thread.
   stop working at any time; see [the risk note](SPEC.md#41-provider).
 
 **Status:** v0.1. A scripted spoken test through the server passed: a reply, a
-lookup and a send, with about 0.8 s to first audio. The browser panel is still
-untested. See [SPEC.md](SPEC.md).
+lookup and a send, with about 0.8 s to first audio. The browser panel,
+announcements, unsend, drafts and new threads are still untested. See
+[SPEC.md](SPEC.md).
 
 ## Setup
 

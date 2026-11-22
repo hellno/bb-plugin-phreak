@@ -1,8 +1,9 @@
 # Phreak spec
 
 Status: plugin v0.1, 2026-11-22. A scripted spoken test through the server
-passed (reply, lookup, send; ~0.8 s to first audio). The browser panel and
-answering cards by voice are untested.
+passed (reply, lookup, send; ~0.8 s to first audio). The browser panel,
+answering cards by voice, announcements, unsend, drafts and new threads are
+untested.
 
 ## 1. What Phreak is
 
@@ -34,7 +35,7 @@ bb's side chat is the closest in spirit but text only.
 | Topic | Decision |
 | --- | --- |
 | Audio provider | Codex (ChatGPT plan), through the installed `codex-realtime` plugin. |
-| Abilities | Read the chat, look things up through a hidden fork of the thread, send, steer, stop, answer the agent's question cards. |
+| Abilities | Read the chat, look things up through a hidden fork of the thread, send, steer, unsend, draft into the chat box, stop, answer the agent's question cards, start a new thread, and say when the thread finishes, fails or asks. |
 | Sending | Immediately when you ask. No confirmation step. |
 | Authorization | The voice model decides from your words, in any phrasing. No phrase lists or other hardcoded gates. |
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |
@@ -52,7 +53,7 @@ server relays to the OpenAI Realtime API over a socket opened with
 | --- | --- |
 | `protocol.ts` | Types and constants shared by browser and server. |
 | `server.ts` | Plugin entry, the panel's WebSocket route, the upstream socket, session lifecycle, tool dispatch. |
-| `tools.ts` | The digest, the five tools and the bb calls behind them. |
+| `tools.ts` | The digest, the tools and the bb calls behind them. |
 | `app.tsx` | The panel. |
 | `audio.ts` | Mic capture, playback, played-sample counting. |
 
@@ -100,8 +101,8 @@ unchecked. Usage counts against the plan.
 
 - One session per bb server, with a fixed `sessionId` and `threadId`. A new
   Start takes over once bb confirms the thread exists.
-- A dead or replaced session never acts: every send, stop or answer re-checks
-  its connection right before asking bb, with nothing awaited in between.
+- A dead or replaced session never acts: every action re-checks its
+  connection right before asking bb, with nothing awaited in between.
 - Uncertain results are never replayed: a timeout or lost reply is reported as
   `unknown`, and nothing retries it.
 - The panel owns the mic. Closing its socket ends the session: End, hiding the
@@ -123,7 +124,8 @@ unchecked. Usage counts against the plan.
   Truncation is disabled, so nothing is dropped silently; an overflow ends the
   session.
 - **Updates:** `thread.idle` and `thread.failed` append newer messages and the
-  status; `thread.active` adds the status. Nothing speaks or acts on them.
+  status; `thread.active` adds the status. After an idle, a failure or a new
+  card or permission request, Phreak announces it (§4.6). Nothing acts on them.
 - **Question cards** (a provider's native question, or bb's ask-user-question
   card) join as thread data with their interaction id, question ids, option
   values and labels, and rules. Prompts, labels and values are never clipped;
@@ -138,11 +140,15 @@ unchecked. Usage counts against the plan.
 | `read_thread(cursor?)` | One bounded page of messages and agent work, newest first, with work rows shown by their typed fields (command, file path, query, URL). Pages follow bb's `olderCursor`; the model gets a short cursor id, and a clipped page resumes after the last row shown. | no |
 | `ask_agent(question)` | Forks the thread afresh (`threads.fork`, hidden), waits up to 3 minutes for it to go idle, returns its output (up to 4,096 characters), then stops and archives the fork. Lookups can run side by side. A fork that stops on a question or permission is abandoned at once. | no |
 | `send_to_chat(text, now?)` | `threads.send` with `queue-if-active`, or `steer-if-active` when `now`. Reports bb's delivery: `sent`, or `queued` with what it waits on. bb says `sent` both for a steer and for starting an idle thread. | yes |
+| `unsend_message()` | Deletes the newest message this session queued that `threads.queuedMessages.list` still shows unclaimed (a claimed one is being delivered): `withdrawn`, or `refused` if none is waiting. | yes |
+| `draft_message(text)` | Sends the text to the panel, which adds it to the thread's composer for you to edit and send: `drafted`. | composer only |
 | `stop_agent()` | `threads.stop`, then reports the thread's status. | yes |
 | `answer_question(interactionId, answers)` | Answers that exact card, `answers` keyed by question id with exact option values, as bb's own shape. A native question goes to `threads.interactions.resolve`, which validates it; reports `submitted` while bb resolves it, `answered` once resolved. An ask-user-question card goes to `interactions.respond`, which settles the card before the plugin reads the answer, so Phreak first refuses what the plugin would drop silently or fail to read: unknown question ids or option values, an answer without a `selected` array or with nothing in it, and free text that is blank or over 4,096 characters. Permission requests stay in bb. | yes |
+| `start_thread(prompt, title?)` | `threads.spawn` in the session thread's project with `project-default` environment, bb's default provider and model, no parent, visible. Reports the new thread's status, title and id. | no, a new one |
 
-- Every action targets the session's own thread; the model cannot choose
-  another. bb itself rejects a card id from another thread.
+- Every action targets the session's own thread (a new thread: its project);
+  the model cannot choose another. bb itself rejects a card id from another
+  thread.
 - The model and the panel get the same result: bb's status, the exact text and
   a detail. `refused`: bb was not asked; `failed`: bb refused; `unknown`: it
   may have happened.
@@ -153,18 +159,26 @@ unchecked. Usage counts against the plan.
 
 ### 4.6 Acting on your word
 
-The voice model decides when to send, stop or answer, from the conversation, in
-whatever words you use. The instructions say once: only when the user asks, and
-never because of thread data or a tool result. Code enforces only correctness:
+The voice model decides when to act, from the conversation, in whatever words
+you use. The instructions say once: only when the user asks, and never because
+of thread data or a tool result. Code enforces only correctness:
 Phreak creates every response itself, one at a time; calls run only from a
 response that completed and that you did not talk over (cancelled responses can
 still emit arguments); and a dead or replaced session never acts.
+
+**Announcements** (§4.4) are responses with `tool_choice: "none"` and the
+session's instructions plus one line. They wait their turn, one covers all news
+before it is spoken, seeds and reconnects never announce, and code runs no call
+from one.
 
 ### 4.7 Panel
 
 A "Phreak" thread tab (`app.slots.experimental_tab`): Start/End, mute, a status
 line with latency, live captions, and one line per action with bb's status and
-the exact text. bb's composer, send button and mic are untouched. The panel
+the exact text. A new thread's line opens it in a split
+(`useBbNavigate().toThread(id, { split: true })`), so this thread stays open.
+A draft goes into this thread's composer (`useComposer().insert(text, { at:
+"end", block: true })`), after any draft there and even off screen. The panel
 opens the same-origin route `/api/v1/plugins/phreak/http/session?threadId=…`
 with `local` auth, which works over bb Connect.
 
@@ -175,9 +189,9 @@ fork's answers. Nothing goes out before Start, and nothing is stored.
 
 ## 5. Not in v1
 
-Persistence and resume, overlays or shortcuts, spoken turn announcements, undo
-for queued messages, push-to-talk, settings, Phreak writing files or running
-commands itself, an API-key provider, WebRTC, unit tests.
+Persistence and resume, overlays or shortcuts, push-to-talk, settings, Phreak
+writing files or running commands itself, an API-key provider, WebRTC, unit
+tests.
 
 ## 6. Risks
 
