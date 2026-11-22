@@ -67,10 +67,9 @@ server relays to the OpenAI Realtime API over a socket opened with
   true }` (a re-read of the sign-in file) if the handshake fails.
 - Phreak never reads `~/.codex/auth.json`. The headers live in server memory for
   one socket and are never logged, sent to the browser or quoted in an error.
-- Errors show the provider's own message. Its refusal of a caller has no code,
-  only words, so a message naming allowed plugins gets one hint: append
-  `phreak` to the list in `bb plugin config codex-realtime`. A failed handshake
-  only says OpenAI refused or did not answer: Node's WebSocket gives no reason.
+- Errors show the provider's own message; the README has the setup hint for
+  its allowed plugins. A failed handshake only says OpenAI refused or did not
+  answer: Node's WebSocket gives no reason.
 - Codex's own `codex app-server` realtime API refuses a ChatGPT login ("requires
   API key auth", codex-cli 0.170.0), so `codex-realtime` is the only route.
 
@@ -100,7 +99,8 @@ unchecked. Usage counts against the plan.
 ### 4.3 Session lifecycle
 
 - One session per bb server, with a fixed `sessionId` and `threadId`. A new
-  Start takes over once bb confirms the thread exists.
+  Start takes over once bb confirms the thread exists, if its panel is still
+  connected and no newer Start has taken over.
 - A dead or replaced session never acts: every action re-checks its
   connection right before asking bb, with nothing awaited in between.
 - Uncertain results are never replayed: a timeout or lost reply is reported as
@@ -109,9 +109,12 @@ unchecked. Usage counts against the plan.
   panel (`experimental_useTabVisible()`), switching threads, or unmounting.
 - If the upstream socket drops, Phreak reconnects once. It rebuilds the digest
   and adds the voice discussion as the user heard it: a reply cut short keeps
-  only its heard share. If that fails, or the context overflows, the session
-  ends visibly and Start rebuilds it.
-- A session ends after 15 minutes of silence and always after 60 minutes.
+  only its heard share. That waits up to 3 s for the panel's report of what it
+  played; without one, replies relayed since its last report are left out. If
+  that fails, or the context overflows, the session ends visibly and Start
+  rebuilds it.
+- A session ends after 15 minutes without user speech and always after 60
+  minutes.
   Nothing is persisted.
 
 ### 4.4 Context
@@ -137,13 +140,13 @@ unchecked. Usage counts against the plan.
 
 | Tool | What it does | Changes the thread |
 | --- | --- | --- |
-| `read_thread(cursor?)` | One bounded page of messages and agent work, newest first, with work rows shown by their typed fields (command, file path, query, URL). Pages follow bb's `olderCursor`; the model gets a short cursor id, and a clipped page resumes after the last row shown. | no |
+| `read_thread(cursor?)` | One bounded page of messages and agent work, newest first, with work rows shown by their typed fields (command, file path, query, URL). Pages follow bb's `olderCursor`; the model gets a short cursor id, and a clipped page keeps its unread rows for the next call. | no |
 | `ask_agent(question)` | Forks the thread afresh (`threads.fork`, hidden), waits up to 3 minutes for it to go idle, returns its output (up to 4,096 characters), then stops and archives the fork. Lookups can run side by side. A fork that stops on a question or permission is abandoned at once. | no |
 | `send_to_chat(text, now?)` | `threads.send` with `queue-if-active`, or `steer-if-active` when `now`. Reports bb's delivery: `sent`, or `queued` with what it waits on. bb says `sent` both for a steer and for starting an idle thread. | yes |
-| `unsend_message()` | Deletes the newest message this session queued that `threads.queuedMessages.list` still shows unclaimed (a claimed one is being delivered): `withdrawn`, or `refused` if none is waiting. | yes |
-| `draft_message(text)` | Sends the text to the panel, which adds it to the thread's composer for you to edit and send: `drafted`. | composer only |
+| `unsend_message()` | Takes the newest message this session queued that `threads.queuedMessages.list` still shows unclaimed, holds it (`experimental_holdForEdit`: bb refuses a claimed row and delivers no held one, except on your explicit send-now) and deletes it: `withdrawn` with its current text, or `refused` if none is waiting. An abandoned delete releases the hold. | yes |
+| `draft_message(text)` | Sends the text to the panel, which adds it to the thread's composer for you to edit and send and answers: `drafted`, `failed` with the composer's error, or `unknown` with no answer in 3 s. | composer only |
 | `stop_agent()` | `threads.stop`, then reports the thread's status. | yes |
-| `answer_question(interactionId, answers)` | Answers that exact card, `answers` keyed by question id with exact option values, as bb's own shape. A native question goes to `threads.interactions.resolve`, which validates it; reports `submitted` while bb resolves it, `answered` once resolved. An ask-user-question card goes to `interactions.respond`, which settles the card before the plugin reads the answer, so Phreak first refuses what the plugin would drop silently or fail to read: unknown question ids or option values, an answer without a `selected` array or with nothing in it, and free text that is blank or over 4,096 characters. Permission requests stay in bb. | yes |
+| `answer_question(interactionId, answers)` | Answers that exact card, `answers` keyed by question id with exact option values, as bb's own shape. A native question goes to `threads.interactions.resolve`, which validates it; reports `submitted` while bb resolves it, `answered` once resolved. An ask-user-question card goes to `interactions.respond`, which settles the card before the plugin reads the answer, so Phreak first refuses what the plugin would drop silently or fail to read: unknown question ids or option values, an answer without a `selected` array or with nothing in it, repeated values, more than one value for a single-select question or more than four, and free text that is blank or over 4,096 characters. Permission requests stay in bb. | yes |
 | `start_thread(prompt, title?)` | `threads.spawn` in the session thread's project with `project-default` environment, bb's default provider and model, no parent, visible. Reports the new thread's status, title and id. | no, a new one |
 
 - Every action targets the session's own thread (a new thread: its project);
@@ -168,15 +171,17 @@ still emit arguments); and a dead or replaced session never acts.
 
 **Announcements** (§4.4) are responses with `tool_choice: "none"` and the
 session's instructions plus one line. They wait their turn, one covers all news
-before it is spoken, seeds and reconnects never announce, and code runs no call
+before it is spoken (one not yet audible when more news arrives is cancelled
+and asked again), seeds and reconnects never announce, and code runs no call
 from one.
 
 ### 4.7 Panel
 
 A "Phreak" thread tab (`app.slots.experimental_tab`): Start/End, mute, a status
 line with latency, live captions, and one line per action with bb's status and
-the exact text. A new thread's line opens it in a split
-(`useBbNavigate().toThread(id, { split: true })`), so this thread stays open.
+the exact text. A new thread's line links it in a new browser tab (its `href`
+from `experimental_useSidebarThreads()`): opening it in bb would unmount the
+panel and end the session.
 A draft goes into this thread's composer (`useComposer().insert(text, { at:
 "end", block: true })`), after any draft there and even off screen. The panel
 opens the same-origin route `/api/v1/plugins/phreak/http/session?threadId=…`

@@ -12,6 +12,8 @@ const HANDSHAKE_TIMEOUT_MS = 15_000;
 const SILENCE_MS = 15 * 60_000;
 const MAX_SESSION_MS = 60 * 60_000;
 const MAX_AUDIO_FRAME_BYTES = 64 * 1024;
+/** How long the panel has to answer `interrupt` or `draft`. */
+const PANEL_ACK_MS = 3_000;
 const MAX_RECAP_CHARS = 8_000;
 const KEPT_ITEMS = 100;
 /** With truncation disabled, a conversation past the model's context fails every response from then on. */
@@ -73,18 +75,12 @@ async function connectRealtime(bb: BbPluginApi, signal: AbortSignal): Promise<We
     signal.throwIfAborted();
     const connection = await bb.sdk.plugins
       .callRpc({ pluginId: PROVIDER_PLUGIN, method: "realtimeConnection", input: refresh ? { refresh: true } : {}, outputSchema: RealtimeConnection })
-      .catch((error: unknown) => Promise.reject(new Error(providerError(error))));
+      .catch((error: unknown) => Promise.reject(new Error(`${PROVIDER_PLUGIN}: ${errorMessage(error)}`)));
     model = connection.model ?? model;
     const socket = await openSocket(connection, signal);
     if (socket) return socket;
   }
   throw new Error(`OpenAI refused or did not answer the voice connection (model ${model}). Run \`codex\` to renew the ChatGPT sign-in, then press Start again.`);
-}
-
-/** The provider's own error. Its refusal of a caller has no code, only words, so that one gets the setup hint. */
-function providerError(error: unknown): string {
-  const message = `${PROVIDER_PLUGIN}: ${errorMessage(error)}`;
-  return /allowed plugins/i.test(message) ? `${message} See \`bb plugin config ${PROVIDER_PLUGIN}\` and append phreak to allowedPlugins.` : message;
 }
 
 /** The open socket, or null. Node's WebSocket does not say why a handshake failed, and its errors can quote header values. */
@@ -111,8 +107,8 @@ function openSocket(connection: RealtimeConnection, signal: AbortSignal): Promis
 
 // ---- One connection attempt
 
-/** A response.create in flight: `id` once OpenAI created it, `interrupted` once the user spoke over it. */
-type ActiveResponse = { eventId: string; id?: string; interrupted: boolean; announce: boolean };
+/** A response.create in flight: `id` once OpenAI created it, `interrupted` once cut (the user spoke over it), `audible` once its audio went out. */
+type ActiveResponse = { eventId: string; id?: string; interrupted: boolean; announce: boolean; audible?: true };
 /** A response to create, after an optional tool output; `announce` speaks about thread news. */
 type PendingResponse = { output?: { callId: string; text: string }; announce?: true };
 
@@ -175,6 +171,11 @@ class Session {
   /** By item, across reconnects: the discussion for a recap, and the audio for barge-in. */
   private readonly lines = new Map<string, Line>();
   private readonly audio = new Map<string, ItemAudio>();
+  /** Items relayed since the browser last said what it played, and the reconnect's flush of its playback. */
+  private readonly unconfirmed = new Set<string>();
+  private flushed: Promise<void> = Promise.resolve();
+  /** What settles each question to the panel: "played" for a flush, a draft's id for a draft. */
+  private readonly answers = new Map<string, (answer: ClientMessage | null) => void>();
   private readonly hardLimit = setTimeout(() => this.end("The session reached its 60-minute limit."), MAX_SESSION_MS);
   private readonly silence = setTimeout(() => this.end("Ended after 15 minutes of silence."), SILENCE_MS);
 
@@ -185,7 +186,16 @@ class Session {
     private readonly registry: { live: Session | null },
   ) {
     this.lookups = new Lookups(bb, threadId);
-    this.target = { threadId, queued: [], draft: (text) => this.toBrowser({ type: "draft", text }) };
+    this.target = {
+      threadId,
+      queued: [],
+      draft: async (text) => {
+        const id = randomUUID();
+        const answer = await this.ask(id, { type: "draft", id, text });
+        if (answer?.type !== "drafted") return { status: "unknown", text, detail: "the panel did not confirm the draft" };
+        return answer.ok ? { status: "drafted", text } : { status: "failed", text, detail: String(answer.error) };
+      },
+    };
     this.readThread = threadReader(bb, threadId);
     this.enqueue(() => this.connect());
   }
@@ -209,8 +219,8 @@ class Session {
       socket.onclose = (event: CloseEvent) => this.onUpstreamClosed(a, event.code);
       const thread = await this.bb.sdk.threads.get({ threadId: this.threadId });
       const questions = await pendingQuestionItems(this.bb, this.threadId).catch(() => []);
-      // After a drop the voice discussion comes back as text, inside the digest's budget.
-      const recap = this.reconnected ? this.recap() : "";
+      // After a drop the voice discussion comes back as text, inside the digest's budget, as far as the user heard it.
+      const recap = this.reconnected ? await this.flushed.then(() => this.recap()) : "";
       const digest = await loadMessages(this.bb, this.threadId, 0, [recap, ...questions].join("").length);
       a.newestSeq = digest.newestSeq;
       a.send({ type: "session.update", session: SESSION_CONFIG });
@@ -229,8 +239,21 @@ class Session {
     if (this.reconnected) return this.end("The voice connection dropped again.", detail);
     this.reconnected = true;
     a.close();
-    this.toBrowser({ type: "interrupt" }); // its audio belongs to the dead conversation
+    // Its audio belongs to the dead conversation. Without the browser's report, what it may not have played stays out of the recap.
+    this.flushed = this.ask("played", { type: "interrupt" }).then((answer) => {
+      if (!answer) for (const itemId of this.unconfirmed) this.line(itemId, "Phreak").heard = 0;
+    });
     this.enqueue(() => this.connect());
+  }
+
+  /** Sends the panel a message; resolves with its answer filed under `key`, or null after PANEL_ACK_MS. */
+  private ask(key: string, message: ServerMessage): Promise<ClientMessage | null> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => settle(null), PANEL_ACK_MS);
+      const settle = (answer: ClientMessage | null) => (clearTimeout(timer), this.answers.delete(key), resolve(answer));
+      this.answers.set(key, settle);
+      this.toBrowser(message);
+    });
   }
 
   end(reason: string, detail?: string): void {
@@ -255,16 +278,20 @@ class Session {
     a.send({ type: "input_audio_buffer.append", audio: Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength).toString("base64") });
   }
 
-  /** The browser flushed its playback on `interrupt`: how much of each item was heard. */
+  /** The composer took a draft or refused it, or the browser flushed its playback on `interrupt`: how much of each item was heard. */
   onBrowserText(data: string): void {
     const message = parseJson(data) as ClientMessage | null;
-    for (const entry of message?.type === "played" && Array.isArray(message.items) ? message.items : []) {
+    if (message?.type === "drafted") return this.answers.get(String(message.id))?.(message);
+    if (message?.type !== "played" || !Array.isArray(message.items)) return;
+    for (const entry of message.items) {
       const audio = this.audio.get(String(entry?.itemId));
       const heard = Math.floor(Number(entry?.ms));
       if (!audio || !(heard >= 0)) continue;
       audio.heardMs = heard;
       this.settle(String(entry.itemId));
     }
+    this.unconfirmed.clear();
+    this.answers.get("played")?.(message);
   }
 
   /** Once part of an item went unheard, truncates it to what was heard and keeps only that share for a recap. */
@@ -390,9 +417,11 @@ class Session {
     const audio = entry(this.audio, itemId, () => ({ a, totalMs: 0, sentMs: 0 }));
     audio.totalMs += ms;
     if (!relay) return;
+    if (a.response) a.response.audible = true;
     audio.sentMs += ms;
     if (a.audioItem !== itemId) {
       a.audioItem = itemId;
+      this.unconfirmed.add(itemId);
       this.toBrowser({ type: "audio_start", itemId });
       this.status("speaking");
     }
@@ -414,6 +443,11 @@ class Session {
   /** Queues one spoken line about thread news, in turn after the user and other responses; one covers all news before it is spoken. */
   private announce(a: Attempt | null): void {
     if (!a || a.stale || a.pending.some((pending) => pending.announce)) return;
+    if (a.response?.announce && !a.response.audible && !a.response.interrupted) {
+      // Not heard yet, so it is cut (none of it plays or stays in the conversation) and asked again with this news.
+      a.response.interrupted = true;
+      a.send({ type: "response.cancel" });
+    }
     a.pending.push({ announce: true });
     this.respond(a);
   }
@@ -422,7 +456,6 @@ class Session {
     const interrupted = a.response?.interrupted ?? false;
     const announced = a.response?.announce ?? false;
     a.response = null;
-    this.silence.refresh();
     if (response.status === "failed") {
       const error = response.status_details?.error;
       if (isOverflow(error)) return this.end(OVERFLOWED);
@@ -540,24 +573,25 @@ export default function plugin(bb: BbPluginApi) {
   bb.events.on("interaction.pending", ({ thread, interaction }) => registry.live?.onInteraction(thread.id, interaction));
   bb.onDispose(() => registry.live?.end("Phreak was reloaded."));
 
+  let starts = 0; // panel connections so far
+  let accepted = 0; // the newest one that took over
   bb.http.experimental_websocket(`/${SESSION_PATH}`, ({ url }) => {
     const threadId = url.searchParams.get("threadId") ?? "";
+    const start = ++starts;
     let session: Session | null = null;
-    let open = true;
-    const closed = (reason: string) => {
-      open = false;
-      session?.end(reason);
-    };
     return {
       async onOpen(socket) {
         // The thread must exist before it may replace the live session.
         const thread = threadId ? await bb.sdk.threads.get({ threadId }).catch(() => null) : null;
-        if (!open) return;
-        if (!thread) {
-          socket.send(JSON.stringify({ type: "ended", reason: `There is no thread ${threadId}.` } satisfies ServerMessage));
+        // bb runs onClose only after onOpen returns, so the socket itself says whether the panel is still there.
+        if (socket.readyState !== 1) return;
+        if (!thread || start < accepted) {
+          const reason = thread ? "A newer Phreak session started." : `There is no thread ${threadId}.`;
+          socket.send(JSON.stringify({ type: "ended", reason } satisfies ServerMessage));
           return socket.close(1008);
         }
         // No await from here on, so two sessions are never live at once.
+        accepted = start;
         registry.live?.end("A new Phreak session started.");
         session = registry.live = new Session(bb, socket, threadId, registry);
       },
@@ -565,8 +599,8 @@ export default function plugin(bb: BbPluginApi) {
         if (typeof data === "string") session?.onBrowserText(data);
         else session?.onBrowserAudio(data);
       },
-      onClose: () => closed("The panel closed."),
-      onError: () => closed("The panel connection failed."),
+      onClose: () => session?.end("The panel closed."),
+      onError: () => session?.end("The panel connection failed."),
     };
   });
 }

@@ -18,8 +18,9 @@ const DIGEST_CHARS = 64_000;
 const MAX_ITEM_CHARS = 20_000;
 const LOOKUP_ANSWER_CHARS = 4_096;
 const LOOKUP_TIMEOUT_MS = 3 * 60_000;
-/** ask-user-question's free-text limit, which it checks only after the card has settled. */
+/** ask-user-question's limits, which it checks only after the card has settled. */
 const ASK_FREE_TEXT_CHARS = 4_096;
+const ASK_MAX_SELECTED = 4;
 const ANSWER_STATUS: Record<string, string> = { resolving: "submitted", resolved: "answered" };
 const LOOKUP_PREAMBLE =
   "This is a read-only lookup for a voice assistant. Answer concisely in plain prose. Do not modify files, run state-changing commands, send messages, or contact other threads. If asked to change something, refuse.";
@@ -137,27 +138,28 @@ export function statusItem(status: string, title?: string): string {
 
 /** read_thread for one session: a bounded page per call, newest first, and a short cursor id for the next one. */
 export function threadReader(bb: BbPluginApi, threadId: string) {
-  // Where each cursor id resumes: bb's cursor for a page, and the row on it last shown, if the page was clipped.
-  const cursors: { before: Cursor | null; after?: string }[] = [];
+  // Where each cursor id resumes: the unread rest of a clipped page, newest first, then bb's cursor for the page before it.
+  const cursors: { rest: string[]; before: Cursor | null }[] = [];
   return async (cursor: unknown): Promise<string> => {
-    const from = cursor === undefined || cursor === null || cursor === "" ? { before: null } : cursors[Number(cursor)];
+    const from = cursor === undefined || cursor === null || cursor === "" ? { rest: [], before: null } : cursors[Number(cursor)];
     if (!from) return `Failed: there is no cursor ${String(cursor)}.`;
     try {
-      const page = await timelinePage(bb, threadId, true, from.before);
-      const all = flatten(page.rows).filter((row) => rowLine(row) !== "").reverse();
-      const rows = all.slice(all.findIndex((row) => row.id === from.after) + 1); // the top of the page if that row is gone
+      let { rest: lines, before } = from;
+      if (lines.length === 0) {
+        const page = await timelinePage(bb, threadId, true, before);
+        lines = flatten(page.rows).map(rowLine).filter((line) => line !== "").reverse();
+        before = page.timelinePage.olderCursor;
+      }
       const shown: string[] = [];
       let budget = MAX_ITEM_CHARS;
-      for (const row of rows) {
-        const line = rowLine(row);
+      for (const line of lines) {
         if (line.length > budget && shown.length > 0) break;
         shown.push(clip(line, budget));
         budget -= line.length;
       }
-      const older = page.timelinePage.olderCursor;
-      const next = shown.length < rows.length ? { before: from.before, after: rows[shown.length - 1].id } : older ? { before: older } : null;
-      const more = next ? `(Older entries: read_thread with cursor "${cursors.push(next) - 1}".)` : "(The thread starts here.)";
-      return [...shown.reverse(), more].join("\n");
+      const next = { rest: lines.slice(shown.length), before };
+      const more = next.rest.length > 0 || before ? `(Older entries: read_thread with cursor "${cursors.push(next) - 1}".)` : "(The thread starts here.)";
+      return [...shown, more].join("\n");
     } catch (error) {
       return `Failed: ${errorMessage(error)}`;
     }
@@ -273,19 +275,20 @@ export async function pendingQuestionItems(bb: BbPluginApi, threadId: string): P
 
 // ---- Actions
 
-/** What actions touch: the session's own thread, the messages it queued there (oldest first) and its panel's composer. */
-export type ActionTarget = { threadId: string; queued: { id: string; text: string }[]; draft: (text: string) => void };
+/** What actions touch: the session's own thread, the ids of the messages it queued there (oldest first) and its panel's composer. */
+export type ActionTarget = { threadId: string; queued: string[]; draft: (text: string) => Promise<ActionResult> };
 /** A refusal, or the action ready to go: `run` asks bb (or the panel) first, before awaiting anything. */
-type Prepared = ActionResult | { text?: string; run: () => Promise<ActionResult> };
+type Prepared = ActionResult | { text?: string; run: (live: () => boolean) => Promise<ActionResult> };
+const GONE = "the session ended or reconnected";
 
 /** One action on the session's thread. `live` is checked right before bb is asked to act, with nothing awaited in between. */
 export async function act(bb: BbPluginApi, target: ActionTarget, tool: ActionTool, args: Record<string, unknown>, live: () => boolean): Promise<ActionResult> {
   const action = await prepare(bb, target, tool, args).catch((error: unknown): ActionResult => ({ status: "refused", detail: errorMessage(error) }));
   if (!("run" in action)) return action;
   const { text } = action;
-  if (!live()) return { status: "refused", text, detail: "the session ended or reconnected" };
+  if (!live()) return { status: "refused", text, detail: GONE };
   try {
-    return await action.run();
+    return await action.run(live);
   } catch (error) {
     // bb answering 4xx means it refused; no answer, a timeout or a 5xx means it may have happened.
     const status = (error as { status?: unknown } | null)?.status;
@@ -304,26 +307,33 @@ async function prepare(bb: BbPluginApi, { threadId, queued, draft }: ActionTarge
         run: async () => {
           const sent = await bb.sdk.threads.send({ threadId, mode: args.now === true ? "steer-if-active" : "queue-if-active", input: [{ type: "text", text, mentions: [] }] });
           if (sent.delivery === "sent") return { status: "sent", text };
-          queued.push({ id: sent.queuedMessage.id, text });
+          queued.push(sent.queuedMessage.id);
           const waiting = sent.queuedMessage.waitingOn;
           return { status: "queued", text, ...(waiting ? { detail: `waiting on ${waiting.kind}` } : {}) };
         },
       };
     case "unsend_message": {
-      const rows = await bb.sdk.threads.queuedMessages.list({ threadId });
-      // A claimed row is already being delivered.
-      const mine = [...queued].reverse().find((q) => rows.some((row) => row.id === q.id && row.state !== "claimed"));
-      if (!mine) return { status: "refused", detail: "nothing Phreak queued on this thread is still waiting" };
+      const { queuedMessages } = bb.sdk.threads;
+      const rows = await queuedMessages.list({ threadId });
+      // The newest still waiting (a claimed row is being delivered), with its text as it is now: the user may have edited it.
+      const row = [...queued].reverse().map((id) => rows.find((r) => r.id === id)).find((r) => r && r.state !== "claimed");
+      if (!row) return { status: "refused", detail: "nothing Phreak queued on this thread is still waiting" };
+      const target = { threadId, queuedMessageId: row.id };
+      const withdrawn = row.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
       return {
-        text: mine.text,
-        run: async () => {
-          await bb.sdk.threads.queuedMessages.delete({ threadId, queuedMessageId: mine.id });
-          return { status: "withdrawn", text: mine.text };
+        text: withdrawn,
+        run: async (live) => {
+          // bb refuses to hold a row it already claimed, and its automatic delivery skips held rows; an abandoned delete lets go.
+          await queuedMessages.experimental_holdForEdit(target);
+          const release = () => void queuedMessages.experimental_releaseEditHold(target).catch(() => undefined);
+          if (!live()) return release(), { status: "refused", text: withdrawn, detail: GONE };
+          await queuedMessages.delete(target).catch((error: unknown) => (release(), Promise.reject(error)));
+          return { status: "withdrawn", text: withdrawn };
         },
       };
     }
     case "draft_message":
-      return !text ? empty : { text, run: async () => (draft(text), { status: "drafted", text }) };
+      return !text ? empty : { text, run: () => draft(text) };
     case "stop_agent":
       return {
         run: async () => {
@@ -367,9 +377,10 @@ async function prepareAnswer(bb: BbPluginApi, threadId: string, args: Record<str
     const labels = selected.map((value) => question?.options?.find((o) => o.value === value)?.label);
     const free = answer?.freeText;
     // ask-user-question reads the answer only once the card has settled: it drops unknown questions and values
-    // silently, and an unreadable answer (no selected array, bad free text) reaches the agent as an error.
-    if (!native && (!question || !Array.isArray(answer?.selected) || labels.includes(undefined) || (!selected.length && free === undefined))) {
-      return { status: "refused", detail: `answer ${id} needs a question id of card ${interactionId} and its option values or free text` };
+    // silently, and an unreadable answer (no selected array, too many selections, bad free text) reaches the agent as an error.
+    const allowed = question?.multiSelect ? ASK_MAX_SELECTED : 1;
+    if (!native && (!question || !Array.isArray(answer?.selected) || labels.includes(undefined) || new Set(selected).size < selected.length || selected.length > allowed || (!selected.length && free === undefined))) {
+      return { status: "refused", detail: `answer ${id} needs a question id of card ${interactionId} and distinct option values of it (at most ${allowed}), or free text` };
     }
     if (!native && free !== undefined && (typeof free !== "string" || !free.trim() || free.length > ASK_FREE_TEXT_CHARS)) {
       return { status: "refused", detail: `free text for ${id} must be 1 to ${ASK_FREE_TEXT_CHARS} characters` };

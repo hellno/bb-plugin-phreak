@@ -4,8 +4,8 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import {
   definePluginApp,
   experimental_Icon as Icon,
+  experimental_useSidebarThreads,
   experimental_useTabVisible,
-  useBbNavigate,
   useComposer,
   type ExperimentalThreadTabProps,
 } from "@get-bb/plugin-sdk/app";
@@ -88,17 +88,15 @@ class Session {
     switch (message.type) {
       case "audio_start":
         return this.audio.startItem(message.itemId);
-      case "interrupt": {
+      case "interrupt":
         this.thinkingAt = null;
-        const played: ClientMessage = { type: "played", items: this.audio.flush() };
-        if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(played));
-        return;
-      }
+        return this.send({ type: "played", items: this.audio.flush() });
       case "draft":
         try {
-          return this.draft(message.text);
+          this.draft(message.text);
+          return this.send({ type: "drafted", id: message.id, ok: true });
         } catch (error) {
-          return this.report({ type: "error", message: `Could not draft into the chat box: ${errorText(error)}` });
+          return this.send({ type: "drafted", id: message.id, ok: false, error: errorText(error) });
         }
       case "ended":
         return this.end(message.reason);
@@ -106,6 +104,10 @@ class Session {
         if (message.state === "thinking") this.thinkingAt = performance.now();
     }
     this.report(message);
+  }
+
+  private send(message: ClientMessage): void {
+    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message));
   }
 
   private play(pcm: ArrayBuffer): void {
@@ -270,8 +272,6 @@ function PhreakPanel({ threadId }: { threadId: string }) {
 
 /** bb's own status for the action, as the model got it. */
 function ActionLine({ action }: { action: ActionMessage }) {
-  const navigate = useBbNavigate();
-  const { threadId } = action;
   return (
     <li className="rounded-md border border-border bg-card px-3 py-2">
       <div className="text-xs text-muted-foreground">
@@ -280,14 +280,19 @@ function ActionLine({ action }: { action: ActionMessage }) {
         {action.detail ? ` · ${action.detail}` : null}
       </div>
       {action.text ? <p className="mt-1 whitespace-pre-wrap break-words">{action.text}</p> : null}
-      {threadId ? (
-        // A split keeps this thread, and so the session, on screen.
-        <button type="button" className={`${BUTTON} ${OUTLINE} mt-2`} onClick={() => navigate.toThread(threadId, { split: true })}>
-          Open thread
-        </button>
-      ) : null}
+      {action.threadId ? <NewThreadLink threadId={action.threadId} /> : null}
     </li>
   );
+}
+
+/** Opens a new thread in a browser tab of its own: opening it in bb would unmount this panel and end the session. */
+function NewThreadLink({ threadId }: { threadId: string }) {
+  const href = experimental_useSidebarThreads().threads.find((thread) => thread.id === threadId)?.href;
+  return href ? (
+    <a href={href} target="_blank" rel="noreferrer" className={`${BUTTON} ${OUTLINE} mt-2`}>
+      Open in a new tab
+    </a>
+  ) : null;
 }
 
 export default definePluginApp((app) => {

@@ -32,12 +32,17 @@ export type ServerMessage =
   /** `text` is the full text so far for this item. An empty user caption at commit reserves its place. */
   | { type: "caption"; role: "user" | "assistant"; itemId: string; text: string; final: boolean }
   | ({ type: "action"; tool: ActionTool } & ActionResult)
-  /** Text for the panel to add to its thread's composer, after any draft there. */
-  | { type: "draft"; text: string }
+  /** Text for the panel to add to its thread's composer, after any draft there; the panel answers `drafted`. */
+  | { type: "draft"; id: string; text: string }
   /** A problem the session survives. */
   | { type: "error"; message: string }
   /** Terminal: the session is over and the socket closes. */
   | { type: "ended"; reason: string };
 
-/** Answer to `interrupt`: how much of every flushed item was heard (0 if none). */
-export type ClientMessage = { type: "played"; items: { itemId: string; ms: number }[] };
+export type Played = { itemId: string; ms: number }[];
+
+export type ClientMessage =
+  /** Answer to `interrupt`: how much of every flushed item was heard (0 if none). */
+  | { type: "played"; items: Played }
+  /** Answer to `draft` once the composer took it, or the composer's error. */
+  | { type: "drafted"; id: string; ok: boolean; error?: string };

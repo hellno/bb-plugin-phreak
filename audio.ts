@@ -1,7 +1,7 @@
 // Mic capture and assistant playback for one Phreak session. The 24 kHz
 // context and gapless playback are adapted from Voice Mode's audio.ts
 // (steveafrost/bb-plugin-voice-mode, MIT).
-import { SAMPLE_RATE, type ClientMessage } from "./protocol";
+import { SAMPLE_RATE, type Played } from "./protocol";
 
 const FRAME_SAMPLES = (SAMPLE_RATE * 40) / 1000; // one 40 ms mic frame
 const FALLBACK_FRAME_SAMPLES = 1024; // ScriptProcessor sizes are powers of two: ~43 ms
@@ -115,9 +115,9 @@ export class SessionAudio {
   }
 
   /** Stops all playback and reports how much was heard of every unfinished item (0 if none). */
-  flush(): ClientMessage["items"] {
+  flush(): Played {
     const now = this.audibleTime();
-    const heard: ClientMessage["items"] = [];
+    const heard: Played = [];
     for (const [itemId, spans] of this.items) {
       if (!this.unfinished(itemId, spans, now)) continue;
       const seconds = spans.reduce((sum, s) => sum + Math.min(Math.max(now - s.start, 0), s.end - s.start), 0);
