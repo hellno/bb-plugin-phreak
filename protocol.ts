@@ -10,7 +10,7 @@
 
 export const PLUGIN_ID = "phreak";
 export const SAMPLE_RATE = 24_000;
-export const SESSION_PATH = "session"; // → /api/v1/plugins/phreak/http/session?threadId=…
+export const SESSION_PATH = "session"; // route "/session" → /api/v1/plugins/phreak/http/session?threadId=…
 
 export type SessionState = "connecting" | "listening" | "thinking" | "speaking" | "reconnecting" | "ended";
 
@@ -23,6 +23,7 @@ export type ServerMessage =
   | { type: "audio_start"; itemId: string }
   /** User started speaking: flush playback, then reply with `played`. */
   | { type: "interrupt" }
+  /** `text` is the full text so far for this item. An empty user caption at commit reserves its place. */
   | { type: "caption"; role: "user" | "assistant"; itemId: string; text: string; final: boolean }
   /** End of user speech → first assistant audio byte, measured on the server. */
   | { type: "latency"; ms: number }
