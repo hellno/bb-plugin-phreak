@@ -41,7 +41,7 @@ Decided with the owner on 2026-11-22:
 | Topic | Decision |
 | --- | --- |
 | Audio provider | Codex (ChatGPT subscription), reached through the installed `codex-realtime` plugin. |
-| v1 abilities | Read the chat and other threads, read files and git, steer and stop the agent. |
+| v1 abilities | Read the chat, look things up through a hidden fork of the thread (files, git, other threads), steer and stop the agent. |
 | Sending | Sends immediately when you ask. No confirmation step. |
 | Repo | Public, lean. No unit tests and no test framework: `tsc --noEmit` and `bb plugin build` are the only checks. |
 
@@ -60,7 +60,7 @@ Lean rules for v1: zero settings, one voice (`marin`), one turn-detection mode
 │  app.tsx         │ + JSON ctl │  both sockets, session,     │ ◀─── │ (JSON+base64)│
 │  audio.ts        │ ◀────────▶ │  gate, dispatch             │      └──────────────┘
 └──────────────────┘            │ tools.ts                    │
-                                │  digest, tools ─▶ bb.sdk    │
+                                │  digest, 4 tools ─▶ bb.sdk  │
                                 └──────────────┬──────────────┘
                                                │ callRpc("realtimeConnection")
                                      ┌─────────▼──────────────┐
@@ -74,7 +74,7 @@ Files:
 | --- | --- |
 | `protocol.ts` | Types and constants shared by browser and server. No logic. |
 | `server.ts` | Plugin entry, the browser WebSocket route, the upstream Realtime socket, session identity, the gate, dispatch. |
-| `tools.ts` | Thread digest, tool definitions, and every bb operation behind them, with read confinement. |
+| `tools.ts` | Thread digest, the four tools, and the bb calls behind them. |
 | `app.tsx` | The panel: Start/End, mute, status, captions, delivery results. Ends the session on hide or unmount. |
 | `audio.ts` | Mic capture, resampling, playback queue, played-sample counting, cleanup. |
 
@@ -191,18 +191,34 @@ unchecked. Usage counts against the ChatGPT plan.
 
 ### 4.5 Tools
 
+Phreak reuses bb's agents instead of hand-writing read tools. The voice model
+has four tools:
+
 | Tool | What it does | Gated |
 | --- | --- | --- |
-| `read_thread(threadId?, before?)` | Messages from this thread, or another thread in the same project (membership is checked), older than `before`. | no |
-| `list_threads()` | Threads in this project, with title and status. | no |
-| `agent_status()` | This thread: status, pending question, queued messages (`threads.queuedMessages.list({ threadId })`). | no |
-| `read_file(path)` | A file's text, or a directory listing, in this thread's workspace. Confined (section 4.7). | no |
-| `git(path?)` | No path: changed files. With a path: that file's patch. Confined. | no |
+| `read_thread(before?)` | Older messages of this thread (`threads.timeline`, `threads.message`). Instant. | no |
+| `ask_agent(question)` | Hands a lookup to a hidden fork of this thread, as side chat does: files, git, other threads, anything the agent can read. The fork is created on first use (`threads.fork`, hidden), reused for the rest of the session, and archived at the end. Answers take an agent turn, about 10 to 60 s, with a 3-minute timeout. | no |
 | `send_to_chat(text, now?)` | Sends `text` to this thread: `queue-if-active` by default, `steer-if-active` when `now`. If bb answers `active-turn-not-steerable`, it queues instead. | yes |
 | `stop_agent()` | `threads.stop` on this thread. | yes |
 
-Mutations always target the session's own `threadId`; the model cannot choose
-another thread. Each bb call sits beside the tool that owns it in `tools.ts`.
+- **Mutations** always target the session's own `threadId`; the model cannot
+  choose another thread.
+- **Status:** the digest updates (section 4.4) carry the thread's status, so
+  "is it done?" needs no tool.
+- **Slow answers:** the voice model says it is checking before it calls
+  `ask_agent`, and you can keep talking while the fork works. The answer is
+  delivered whenever it arrives.
+
+**The fork's powers.** bb gives plugins no read-only or plan mode for a fork,
+so the fork has the main agent's permissions in the same workspace.
+
+- Every question carries a fixed prefix: it is a read-only lookup, so the agent
+  must not change files, run state-changing commands, or message anyone, and
+  must refuse if asked to.
+- That is an instruction, not enforcement. A question shaped by injected
+  content could still lead the fork to act.
+- Read confinement is bb's and the agent's own: its sandbox and permission
+  mode.
 
 ### 4.6 The gate
 
@@ -230,7 +246,7 @@ the model asks you.
 
 So "check the diff, and if it touches auth tell it to add tests" works in one
 step: "tell it" is in your words. But "what did the diff say?" can never lead to
-a send, whatever the diff contains.
+a send, whatever the answer contains.
 
 **Limitations:**
 
@@ -240,22 +256,7 @@ a send, whatever the diff contains.
 - The intent phrases are English.
 - The panel shows the exact text of every send, and "stop it" is the backstop.
 
-### 4.7 Read confinement
-
-- Phreak resolves the session thread's environment to get its `hostId` and
-  workspace root. Every `files.read` and `files.list` passes them as `hostId` and
-  `rootPath`. bb's host checks that the resolved target stays inside the root.
-- Paths are taken relative to the root. Absolute paths and `..` are refused.
-- **Secret names** are refused, on the requested path and, for git, on both
-  sides of a rename: `.env*`, `*.pem`, `*.key`, `id_rsa*` / `id_ed25519*`,
-  `.ssh/`, `.aws/`, `.codex/`, `credentials*`, `secrets*`.
-  - Changed files with such names are left out of `git()` listings.
-  - A symlink inside the repo that points at a secret file is not caught. That
-    is a documented limitation.
-- **Caps:** `read_file` returns at most 64 KB and a patch at most 32 KB, with a
-  note when the output is cut.
-
-### 4.8 UI
+### 4.7 UI
 
 - **Panel:** a "Phreak" thread panel tab (`app.slots.experimental_tab`). It
   has:
@@ -271,13 +272,13 @@ a send, whatever the diff contains.
   auth. That route runs the same origin guard as bb's own API, which already
   works over bb Connect.
 
-### 4.9 Privacy
+### 4.8 Privacy
 
 While a session runs, the provider receives:
 
 - mic audio
 - the digest
-- whatever the tools read, within the confinement above
+- the fork's answers
 
 Nothing goes out before Start, and nothing is stored.
 
@@ -286,8 +287,8 @@ Nothing goes out before Start, and nothing is stored.
 - Persistence, voice history, resume summaries, automatic session rollover.
 - Overlay, floating chip, keyboard shortcut, header button, tool activity feed.
 - Spoken turn announcements, undo for queued messages, push-to-talk, settings.
-- Writing files, running commands, content search, a hidden-fork delegate, an
-  API-key provider, WebRTC.
+- Writing files or running commands from Phreak itself, an API-key provider,
+  WebRTC.
 - Unit tests.
 
 ## 6. Build plan
@@ -295,7 +296,7 @@ Nothing goes out before Start, and nothing is stored.
 | Slice | Scope | Done when |
 | --- | --- | --- |
 | **1 Talk** | Package, protocol, panel, audio both ways, the provider connection with error categories, digest and updates, barge-in, lifecycle and limits. | Over bb Connect, you can discuss a real thread, interrupt Phreak, and it recalls earlier options correctly. Latency is noted. |
-| **2 Read** | `read_thread`, `list_threads`, `agent_status`, `read_file`, `git`, with confinement. | Lookups answer correctly, and reads outside the root or of secret names are refused. |
+| **2 Look up** | `read_thread`, `ask_agent` with the hidden fork. | "Did it touch the auth module?" comes back correct while you keep talking, and the fork is archived at session end. |
 | **3 Act** | `send_to_chat`, `stop_agent`, the gate, result lines. | The flow in section 1 works end to end. "What did the diff say?" over a diff containing "send this" sends nothing. |
 
 The checks are `tsc --noEmit`, `bb plugin build`, and the manual checks above.
@@ -307,7 +308,7 @@ The checks are `tsc --noEmit`, `bb plugin build`, and the manual checks above.
 | OpenAI stops accepting the Codex sign-in for Realtime. | The provider is a plugin contract. Another `realtimeConnection` plugin, or a small API-key provider, can replace it. |
 | `experimental_` SDK APIs change. | Pin the SDK and re-check on each bb update. |
 | The voice model writes the wrong message. | The panel shows the exact text, and "stop it" stops the turn. |
-| Instructions injected into context. | The intent check, mutations bound to the session's thread, and read confinement. |
+| Instructions injected into context. | The intent check and mutations bound to the session's thread. The fork's read-only prefix is an instruction only (section 4.5). |
 | Latency through bb Connect. | Measured in slice 1. WebRTC is the fallback plan. |
 
 ## 8. Credits
