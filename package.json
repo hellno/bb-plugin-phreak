@@ -1,0 +1,43 @@
+{
+  "name": "bb-plugin-phreak",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "A realtime voice layer for bb chats: talk the chat through, then say \"send that\".",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hellno/bb-plugin-phreak.git"
+  },
+  "engines": {
+    "bb": ">=0.50",
+    "bbPluginSdk": ">=0.6.157"
+  },
+  "bb": {
+    "name": "Phreak",
+    "description": "Talk a thread through with a voice model that knows the whole chat, then say \"send that\". Runs on your ChatGPT plan via codex-realtime.",
+    "branding": {
+      "icon": "AudioLines"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "bb plugin build"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.157",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^12.0.0",
+    "cron-parser": "^5.5.0",
+    "hono": "^4.11.9",
+    "typescript": "^5.7.0"
+  }
+}

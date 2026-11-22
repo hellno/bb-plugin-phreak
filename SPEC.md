@@ -1,11 +1,11 @@
 # Phreak spec
 
-Status: draft v0.2, 2026-11-22. Nothing is built yet.
+Status: v0.3, 2026-11-22. Lean v1, challenged for bloat and bugs; being built.
 
 ## 1. What Phreak is
 
-Phreak is a realtime voice layer that sits on top of a bb thread. You open it
-beside a chat and talk the chat through with a voice model that knows the whole
+Phreak is a realtime voice layer that sits on top of a bb thread. You open its
+panel beside a chat and talk the chat through with a voice model that knows the
 conversation. When you say so, it writes the message and sends it into the
 thread.
 
@@ -15,14 +15,14 @@ thread's agent until you ask for it.
 
 A typical session:
 
-1. You open a thread where the agent has laid out options A to D. You press the
-   Phreak button.
+1. You open a thread where the agent has laid out options A to D, and open the
+   Phreak panel. You press Start.
 2. You ask: "Remind me what B costs us. Did it already touch the auth module?"
-   Phreak answers from the transcript and checks `git diff`.
+   Phreak answers from the transcript and checks the diff.
 3. You talk it through: "Skip the migration. Actually, A plus D."
 4. You say: "Okay, send that." Phreak writes "Go with A and D. Skip the
    migration…", sends it at once, and says "Sent" once bb confirms.
-5. While the agent works you can ask "is it done?", or say "tell it now to add
+5. While the agent works you can ask "is it done?", say "tell it now to add
    tests too" (Phreak steers the turn), or say "stop it".
 
 ## 2. Why another voice plugin
@@ -34,345 +34,281 @@ A typical session:
 | Handsfree (swairshah) | A voice operator that focuses threads and sends messages. | Uses `gpt-live-1`, which refuses the ChatGPT sign-in. No licence, so we reuse nothing from it. |
 | Side chat (bb builtin) | A text fork of the thread in a side panel, with "Send to main thread". | Text only. Closest in spirit; Phreak is its voice counterpart. |
 
-Phreak fills the gap: discussion with full context, read-only lookups, steer
-and stop, and a send that happens only when you ask.
-
-## 3. Decisions made
+## 3. Decisions
 
 Decided with the owner on 2026-11-22:
 
 | Topic | Decision |
 | --- | --- |
 | Audio provider | Codex (ChatGPT subscription), reached through the installed `codex-realtime` plugin. |
-| What the voice model can do in v1 | Read the chat and other threads, read files and git, steer and stop the agent. |
+| v1 abilities | Read the chat and other threads, read files and git, steer and stop the agent. |
 | Sending | Sends immediately when you ask. No confirmation step. |
-| Repo | Public. |
+| Repo | Public, lean. No unit tests and no test framework: `tsc --noEmit` and `bb plugin build` are the only checks. |
 
 Proposed but not yet confirmed: the name Phreak, the MIT licence, and the
-panel UI (section 4.6).
+panel UI.
+
+Lean rules for v1: zero settings, one voice (`marin`), one turn-detection mode
+(`semantic_vad`), no persistence, one panel.
 
 ## 4. Architecture
 
 ```
- bb app (browser)                    bb server                         OpenAI
-┌───────────────────────┐ WebSocket  ┌──────────────────────────┐  wss  ┌───────────────┐
-│ Phreak panel (tab)    │ binary PCM │ Phreak server            │ ────▶ │ Realtime API  │
-│ Audio engine (overlay)│ + JSON ctl │  session manager + gate  │ ◀──── │ gpt-realtime-*│
-│  mic capture 24k PCM  │ ◀────────▶ │  context builder         │ JSON+ └───────────────┘
-│  playback buffer      │            │  tool runner ─▶ bb.sdk   │ base64
-└───────────────────────┘            │  SQLite store            │
-                                     └──────────┬───────────────┘
-                                                │ callRpc("realtimeConnection")
-                                     ┌──────────▼───────────────┐
-                                     │ codex-realtime plugin    │
-                                     │ (Codex ChatGPT sign-in)  │
-                                     └──────────────────────────┘
+ bb app (browser)               bb server                            OpenAI
+┌──────────────────┐ WebSocket  ┌─────────────────────────────┐ wss  ┌──────────────┐
+│ Phreak panel     │ binary PCM │ server.ts                   │ ───▶ │ Realtime API │
+│  app.tsx         │ + JSON ctl │  both sockets, session,     │ ◀─── │ (JSON+base64)│
+│  audio.ts        │ ◀────────▶ │  gate, dispatch             │      └──────────────┘
+└──────────────────┘            │ tools.ts                    │
+                                │  digest, tools ─▶ bb.sdk    │
+                                └──────────────┬──────────────┘
+                                               │ callRpc("realtimeConnection")
+                                     ┌─────────▼──────────────┐
+                                     │ codex-realtime plugin  │
+                                     └────────────────────────┘
 ```
 
-The plugin is a standard bb package: `server.ts` (backend), `app.tsx`
-(frontend), with `@get-bb/plugin-sdk` pinned to the version the scaffold
-ships (0.6.157, bb ≥ 0.50). Most APIs used below are `experimental_`, so the
-pin matters. All bb calls go through one module, so an SDK change touches one
-file. The repo stays lean: no unit tests, no test framework. `tsc --noEmit` and
-`bb plugin build` are the only checks.
+Files:
+
+| File | Owns |
+| --- | --- |
+| `protocol.ts` | Types and constants shared by browser and server. No logic. |
+| `server.ts` | Plugin entry, the browser WebSocket route, the upstream Realtime socket, session identity, the gate, dispatch. |
+| `tools.ts` | Thread digest, tool definitions, and every bb operation behind them, with read confinement. |
+| `app.tsx` | The panel: Start/End, mute, status, captions, delivery results. Ends the session on hide or unmount. |
+| `audio.ts` | Mic capture, resampling, playback queue, played-sample counting, cleanup. |
+
+`@get-bb/plugin-sdk` is pinned to 0.6.157 (bb ≥ 0.50). Most APIs used are
+`experimental_`, so the pin matters. Git installs build on install, so `dist/`
+is not committed.
 
 ### 4.1 Provider: Codex through `realtimeConnection`
 
-- Phreak asks for a connection over the plugin RPC that Voice Mode already
-  uses: `bb.sdk.plugins.callRpc({ pluginId, method: "realtimeConnection" })`.
-  The answer is `{ protocol: "openai-realtime", url: "wss://…", headers, model? }`.
-- The default `pluginId` is `codex-realtime`. It reads the Codex ChatGPT sign-in
-  and returns a bearer header.
-  - Phreak never reads `~/.codex/auth.json`, never stores the header, and asks
-    again for each session.
-  - `codex-realtime` also picks the model (`gpt-realtime-2.1` by default, in
-    its own settings). Phreak has no model setting and reads the model from the
-    answer.
-- `codex-realtime` gives the sign-in only to plugins on its allow-list, checked
-  by caller plugin id. The owner adds `phreak` there once:
-  `bb plugin config codex-realtime set allowedPlugins voice-mode,phreak`.
-- **The sign-in can expire.** `{ refresh: true }` only makes `codex-realtime`
-  re-read the file; it never renews the token. If a handshake still fails after
-  one refresh, the session ends with "Codex sign-in expired: run `codex` once,
-  then resume." Reconnect and rollover follow the same rule.
-- **Other providers:** any plugin that answers `realtimeConnection` (for
-  example `realtime-gateway`) works by changing the `connectionPlugin` setting.
-  An OpenAI API key provider is a v2 addition.
+- Phreak calls `bb.sdk.plugins.callRpc({ pluginId: "codex-realtime", method:
+  "realtimeConnection", input: {} })` for each session. The answer is
+  `{ protocol: "openai-realtime", url: "wss://…", headers, model? }`.
+- Phreak never reads `~/.codex/auth.json`. The headers stay in server memory
+  for the life of one socket, and are never logged, sent to the browser, or put
+  in an error message.
+- If the handshake fails, Phreak asks once more with `{ refresh: true }`.
+  `refresh` only re-reads the sign-in file; it never renews the token.
+- **Errors are reported by category, not guessed.** Each category has its own
+  message:
+  - the provider plugin is missing
+  - the provider refused the caller ("add phreak to codex-realtime's allowed
+    plugins")
+  - the provider reported a sign-in problem (its own message, such as "run
+    `codex login`")
+  - the handshake was rejected (HTTP status and model)
+  - a network failure
+- **Setup:** `codex-realtime` gives the sign-in only to plugins on its
+  allow-list. Append `phreak` to the existing list; don't replace it. Check
+  the current value with `bb plugin config codex-realtime`, then set, for
+  example, `voice-mode,phreak`.
+- The model comes from the provider's answer (`gpt-realtime-2.1` by default).
 
-What we tested on 2026-11-22:
+What we tested on 2026-11-22: Codex's own `codex app-server`
+`thread/realtime/*` API (codex-cli 0.170.0) answers "realtime conversation
+requires API key auth" with a ChatGPT login, for the default protocol version,
+v2 and v3. So Codex cannot serve voice directly. The `codex-realtime` path last
+worked on Nov 16 according to its logs, and is re-verified on first run.
 
-- **Codex's own realtime API fails with a ChatGPT sign-in.** In codex-cli
-  0.170.0, `codex app-server` has an experimental `thread/realtime/*` API.
-  With a ChatGPT login it answers "realtime conversation requires API key auth"
-  for the default protocol version, v2 and v3. That rules out using Codex as the
-  voice backend directly. If OpenAI opens it up, a `codex-app-server` provider
-  can sit behind the same interface.
-- **The `codex-realtime` path is not re-verified today.** Its logs show
-  sessions opening through Voice Mode on Nov 11, 12 and 16. M0 confirms it still
-  works.
+Known risks: OpenAI does not document this use of the ChatGPT sign-in, and
+already refuses it for `gpt-live-1`. Whether the ChatGPT/Codex terms allow it is
+unchecked. Usage counts against the ChatGPT plan.
 
-Known risks: OpenAI does not document this use of the ChatGPT sign-in. It
-already refuses it for `gpt-live-1`, so it can stop working without notice.
-Whether the ChatGPT/Codex terms allow it is unchecked. Usage counts against the
-ChatGPT plan.
+### 4.2 Audio
 
-### 4.2 Audio path and latency
-
-The owner reported Voice Mode as laggy and flaky, so latency is a first-class
-requirement with a number attached.
-
-- **Browser to server:** one plugin WebSocket route
-  (`bb.http.experimental_websocket`) carries two kinds of frames.
-  - Binary frames hold the audio: 20 to 40 ms of PCM16 at 24 kHz, about
-    48 KB/s upstream, with no base64.
-  - Text frames hold JSON control messages:
-    - server to browser: captions, status, tool activity, sent-message events
-    - browser to server: mute, push-to-talk press and release, and the playback
-      position (item id and milliseconds played)
-- **Server to OpenAI:** the Realtime protocol is JSON with base64 audio. The
-  server converts between the two.
-- **Capture and playback:**
-  - Mic capture uses echo cancellation and noise suppression.
-  - Playback goes through a buffer that can be flushed instantly.
-  - AudioWorklet is preferred, but it is unproven here. Voice Mode's code says
-    bb's Content Security Policy may block worklet modules, so it uses
-    `ScriptProcessor` (1024-sample frames, about 43 ms, on the main thread).
-  - A bb source checkout from 2026-11-07 shows no CSP on the web app. M0 tests a
-    worklet loaded from a Blob URL, and the `ScriptProcessor` path adapted from
-    Voice Mode is the fallback.
-- **Turn detection:**
-  - `semantic_vad` is the default, with configurable eagerness. `server_vad` is
-    also available.
-  - `manual` is push-to-talk. Realtime turn detection is off; Phreak commits
-    the audio buffer and creates the response on release.
+- **Upstream:** the browser sends binary frames of PCM16 mono at 24 kHz, about
+  40 ms each. Capture asks for echo cancellation, noise suppression and auto
+  gain. It resamples to 24 kHz when the device runs at another rate.
+  - AudioWorklet loaded from a Blob URL, falling back to `ScriptProcessor`.
+  - Voice Mode's code says bb's CSP may block worklets. A bb source checkout
+    from 2026-11-07 shows no CSP on the web app.
+- **Downstream:** before the PCM of each assistant audio item, the server sends
+  a JSON `audio_start { itemId }` frame. The browser tags the binary frames that
+  follow with that item. It labels playback buffers at the wire rate (24 kHz),
+  counts the samples actually played per item, and caps its queue at a few
+  seconds.
 - **Barge-in:**
-  - With VAD, `input_audio_buffer.speech_started` triggers it.
-  - With push-to-talk, the key press triggers it and Phreak sends
-    `response.cancel`.
-  - Either way, the browser flushes playback and reports the item id and the
-    milliseconds actually played. The server sends `conversation.item.truncate`
-    with those values, so the model knows what you heard.
-- **Latency target:** at most 700 ms locally and at most 1 s through the bb
-  Connect tunnel, measured from the end of your speech to the first audio byte,
-  with the thread digest loaded. The panel shows the measured value.
-- **WebRTC (not in v1):** a direct browser-to-OpenAI audio path would skip the
-  tunnel hop. The `{ url, headers }` contract cannot express it, so it needs a
-  contract extension or its own provider. It is revisited only if the relay
-  misses the targets.
-- **Resilience:**
-  - Phreak keeps the conversation state itself, in SQLite (section 4.7).
-  - If the socket drops, Phreak reconnects with backoff. It seeds the new
-    session with the thread digest and the recent voice discussion, and the
-    panel shows "reconnecting".
-  - Before the context fills up or the Realtime session limit nears (about
-    60 min), Phreak rolls over to a fresh session the same way.
+  1. On `input_audio_buffer.speech_started`, the server sends `interrupt`.
+  2. The browser flushes playback, drops any late frames for that item, and
+     answers `played { itemId, ms }`.
+  3. The server sends `conversation.item.truncate` with those values, so the
+     model knows what you heard.
+- **AudioContext:** created and resumed inside the Start click handler, so
+  Safari and mobile browsers allow it.
+- **Echo:** speaker output can still trigger VAD. The README recommends
+  headphones.
+- **Latency:** the status line shows the time from the end of your speech to the
+  first *audible* output. Targets are about 700 ms locally and about 1 s through
+  bb Connect.
 
-### 4.3 Context
+### 4.3 Session lifecycle
 
-This is the core difference from Voice Mode.
+- **One session per bb server.**
+  - Each session has an immutable `sessionId`, `threadId` and `projectId`, fixed
+    at start.
+  - A new Start takes over: the old session is invalidated first, and its
+    sockets close.
+- **Invalidation is checked at every await boundary that can act.** Before any
+  send or stop is dispatched, the server re-checks that the session is still
+  the live one. Work left over from a dead session does nothing.
+- **Uncertain results are never replayed.** If a send or stop fails with an
+  unknown outcome (a timeout or a lost reply), the panel shows "delivery
+  unknown" with the target thread, and nothing retries it.
+- **The panel owns the mic.** The session ends when the panel is hidden, the
+  thread changes, or the panel unmounts. bb keeps closed tabs mounted, so this
+  uses `experimental_useTabVisible()`. It also ends if mic permission resolves
+  after any of those.
+- **Drops:** if the upstream socket drops, Phreak reconnects once. It re-seeds
+  the digest and the in-memory discussion as text items. If that fails, the
+  session ends visibly and Start rebuilds from bb.
+- **Limits:** a session ends after 10 minutes of silence, or 20 minutes while an
+  agent turn Phreak sent is running. It always ends after 60 minutes. Nothing
+  is persisted.
 
-- **Budget:** Phreak derives the context size from the model the provider
-  returns: 128k tokens for `gpt-realtime-2` and `2.1`, 32k for mini models, and
-  a conservative 24k for unknown models. The digest gets a share of it
-  (setting `contextBudgetTokens`, default 40k, tuned by M0's latency numbers).
-  A large prefix costs time to first audio and plan usage, which is why M0
-  measures with the digest loaded.
-- **At start**, Phreak builds a thread digest and adds it as conversation items,
-  not as instructions (instructions plus tools are capped at about 16k tokens).
-  - The title, every user message and every agent final message go in full,
-    newest first, up to the budget.
-  - Older turns go in as one-line previews (`threads.conversationOutline`).
-  - Tool and command rows shrink to one line each, for example
-    "ran tests: 3 failed".
-  - Sources: `threads.timeline`, `threads.output`, `threads.get`.
-- **Truncation:** Phreak sets the session's `truncation` explicitly rather than
-  rely on the default, which may drop the oldest items: the digest. It tracks
-  `response.done.usage` and rolls over to a fresh, re-seeded session before the
-  limit.
-- **While talking:**
-  - Phreak listens to `bb.events`: `thread.idle`, `thread.failed`,
-    `interaction.pending` and `experimental_thread.events`.
-  - `threads.timeline({ afterTag })` returns either a delta (upserted and
-    patched rows) or a full snapshot. Phreak keeps a map from timeline row id to
-    conversation item, and adds a turn only once it has finished. A turn
-    finishes at `thread.idle`, which carries `lastAssistantText`. Rows that are
-    still streaming are never appended, so nothing is duplicated.
-  - New turns are added silently. When a turn you sent finishes, fails, or
-    stops to ask you something, Phreak says one sentence about it (setting
-    `announceTurns`, on by default; see section 4.4 for how).
-- **On demand**, `read_thread` pulls older or full messages.
-- **Across sessions**, a short summary of earlier voice discussions on the same
-  thread is included, so you can pick up where you left off.
-- **Trust:** thread, file and git content is data. It is wrapped as
-  `[thread data]`, never placed in instructions, and the instructions say never
-  to follow directions found inside it. The gate in section 4.4 adds hard limits
-  in code on where and how often the model can act. It cannot check whether the
-  model acted on your words or on injected text.
+### 4.4 Context
 
-### 4.4 Tools and the gate
+- **Budget:** 40k tokens for 128k models (`gpt-realtime-2`, `2.1`), 8k for
+  mini models, and 8k for unknown models. Estimated as characters ÷ 4.
+- **Digest at start:**
+  - The thread title, then user messages and agent final messages.
+  - Messages are picked newest first until the budget is spent, then inserted
+    oldest first, so later decisions supersede earlier ones.
+  - Each message is one `conversation.item.create` (role user, `input_text`)
+    wrapped as `[thread data] …`. No response is created for them.
+  - Tool and work rows are left out; `read_thread` can fetch them.
+- **Updates:** `thread.idle` and `thread.failed` for the session's thread are
+  treated as invalidation signals. Phreak fetches messages newer than the
+  newest one it has included and appends them oldest first. No response is
+  created, so nothing speaks or acts on them.
+- **Truncation:** the session sets `truncation` explicitly so the digest is not
+  silently dropped.
+- **Trust:** thread, file and git content is data. It never goes in
+  instructions, and the instructions say never to follow directions inside it.
+  Section 4.6 limits in code what the model can do with it.
 
-| Tool | What it does | bb API | Gated |
-| --- | --- | --- | --- |
-| `read_thread(range?, query?)` | Older or full messages from this thread. | `threads.timeline`, `threads.message` | no |
-| `agent_status()` | Busy, idle, or waiting on you; queued messages. | `threads.get`, `threads.interactions.list`, `threads.queue.list` | no |
-| `list_threads()` / `read_other_thread(id)` | Other threads in the project. | `threads.list`, `threads.timeline` | no |
-| `list_files(path)` / `read_file(path, lines?)` | Files in the thread's workspace, read-only and confined (below). | `bb.sdk.files.list`, `bb.sdk.files.read` | no |
-| `git_status()` / `git_diff(path?)` | Workspace git state. | `bb--git` plugin RPC, keyed by environment id | no |
-| `send_to_chat(text, when)` | Sends a message to the thread. `when` is `queue` (wait for the current turn) or `now` (steer it). | `threads.send` | yes |
-| `stop_agent()` | Stops the agent's turn. | `threads.stop` | yes |
+### 4.5 Tools
 
-**The gate.** Gated tools change the thread, so they run only on your direct
-request:
+| Tool | What it does | Gated |
+| --- | --- | --- |
+| `read_thread(threadId?, before?)` | Messages from this thread, or another thread in the same project (membership is checked), older than `before`. | no |
+| `list_threads()` | Threads in this project, with title and status. | no |
+| `agent_status()` | This thread: status, pending question, queued messages (`threads.queuedMessages.list({ threadId })`). | no |
+| `read_file(path)` | A file's text, or a directory listing, in this thread's workspace. Confined (section 4.7). | no |
+| `git(path?)` | No path: changed files. With a path: that file's patch. Confined. | no |
+| `send_to_chat(text, now?)` | Sends `text` to this thread: `queue-if-active` by default, `steer-if-active` when `now`. If bb answers `active-turn-not-steerable`, it queues instead. | yes |
+| `stop_agent()` | `threads.stop` on this thread. | yes |
 
-- **User response:** Phreak marks a response as a "user response" when it is
-  created for a committed user audio item. With VAD the API creates it after
-  `input_audio_buffer.committed`; with push-to-talk Phreak creates it on
-  release. Phreak's own bookkeeping decides this, not a VAD event.
-- **Gated tools only there:** gated tools are allowed only in a user response.
-  The tool runner checks this by `response_id` and refuses everything else.
-  - Every follow-up response after a tool result is created with a
-    `response.tools` override that lists only the read-only tools.
-  - So a lookup can never lead straight to a send or a stop. A gated call needs
-    a fresh utterance from you.
-- **One gated call per item:** each committed user audio item allows at most
-  one gated call.
-- **The cost:** "check the diff, and if it touches auth tell it to add tests"
-  takes two steps. Phreak reads, reports, and you say "send it". Plain "send
-  that" after a discussion works in one step, because the digest is already in
-  context.
-- **Announcements:** turn announcements run as out-of-band responses
-  (`conversation: "none"`, explicit input, no tools, tagged in `metadata`).
-  - They are cancelled the moment you speak.
-  - Their text is then added as a note, so the model knows what you heard.
-- **No false "Sent":** Phreak says "Sent" only from the tool result, after bb
-  returns.
-- **What the gate does not cover:** inside a user response the model still sees
-  the digest and earlier tool results. Injected text there could make it send
-  on an utterance that did not ask for a send. The code guarantees only where
-  gated calls happen and how many. Whether a call matches your request rests on
-  the model. With "send immediately" there is no confirmation to catch a wrong
-  send; the panel log, undo for queued messages, and "stop it" are the backstop.
+Mutations always target the session's own `threadId`; the model cannot choose
+another thread. Each bb call sits beside the tool that owns it in `tools.ts`.
 
-**Read confinement.** The read tools can be triggered by injected content, so
-they are fenced in code:
+### 4.6 The gate
 
-- **Workspace only:** `bb.sdk.files.read` accepts any absolute path on a host.
-  Phreak resolves the thread's environment (`threads.get`, then
-  `environments.get`) to get its host and root. It resolves every path with
-  realpath and refuses anything outside the root.
-- **Secrets denied:** `.env*`, `*.pem`, `*.key`, `id_*`, `.ssh/`, `.aws/`,
-  `.codex/`, and `credentials*` are refused even inside the root.
-- **Caps:** `read_file` returns at most 64 KB and `git_diff` at most 32 KB, with
-  a note when the output is cut.
-- **Not stored:** tool outputs are never written to SQLite. Only the tool name,
-  its arguments and the output size are logged.
+Sends and stops change the thread, so the code (not only the prompt) ties them
+to your own words.
 
-Content search across files is left out of v1: it needs a host entry to run
-`rg` in the workspace. It is a candidate for M3.
+1. **Bind:** every response is bound to the committed user audio item that
+   created it. Follow-up responses after tool results inherit that binding.
+   Phreak's own bookkeeping decides this.
+2. **Intent check:** before a gated call is dispatched, Phreak waits up to 5 s
+   for that item's final input transcription. It then checks that the
+   transcription contains an intent phrase for that tool:
+   - `send_to_chat`: "send", "tell it", "tell the agent", "go ahead", "ship it"
+   - `stop_agent`: "stop", "cancel", "abort", "halt"
 
-### 4.5 Sending
+   The phrase list is one constant in `server.ts`.
+3. **Once:** a matching item authorizes one gated call and is then consumed.
+4. **Completed only:** a gated call is dispatched on `response.done` with status
+   `completed`, never on `function_call_arguments.done`, because cancelled
+   responses can still emit arguments.
+5. **Ownership:** the session must still be live (section 4.3).
 
-- **Trigger:** only an explicit ask, such as "send that", "tell it…" or "go
-  ahead". The gate in section 4.4 enforces it.
-- **Text:** the voice model writes the message as a clear instruction that
-  carries the decisions from the discussion, the way you would type it. It is
-  not a transcript of your words.
-- **Delivery:** the message goes out immediately.
-  - `when: "queue"` (the default) uses `threads.send` mode `queue-if-active`.
-  - `when: "now"` ("tell it now", "steer it") uses `steer-if-active`. If bb
-    answers `active-turn-not-steerable`, Phreak queues instead and says so.
-- **Confirmation:** the panel shows the exact text with its state (sent or
-  queued). Phreak says "Sent" or "Queued" plus a one-line gist.
-- **Undo:** `threads.send` returns the queued row's id, so a queued message can
-  be withdrawn from the panel with `queuedMessages.delete`. A sent one cannot;
-  say "stop it".
-- **Stop:** `threads.stop` stops the turn and also releases the agent's loaded
-  runtime, and the thread can sit in `stopping` for a moment. Phreak reports the
-  status once it settles.
-- **Origin:** messages carry `originPluginId: "phreak"`, so bb records that the
-  plugin sent them.
+If a check fails, the tool returns a refusal ("say 'send it' to confirm") and
+the model asks you.
 
-### 4.6 UI
+So "check the diff, and if it touches auth tell it to add tests" works in one
+step: "tell it" is in your words. But "what did the diff say?" can never lead to
+a send, whatever the diff contains.
 
-- **Panel:** a "Phreak" thread panel tab beside the chat
-  (`app.slots.experimental_tab`). It shows:
-  - a status line: listening, thinking, speaking or reconnecting, plus latency
+**Limitations:**
+
+- A mis-transcription can authorize or block a call.
+- Text injected into context can still change what the message says on an
+  utterance that does ask for a send.
+- The intent phrases are English.
+- The panel shows the exact text of every send, and "stop it" is the backstop.
+
+### 4.7 Read confinement
+
+- Phreak resolves the session thread's environment to get its `hostId` and
+  workspace root. Every `files.read` and `files.list` passes them as `hostId` and
+  `rootPath`. bb's host checks that the resolved target stays inside the root.
+- Paths are taken relative to the root. Absolute paths and `..` are refused.
+- **Secret names** are refused, on the requested path and, for git, on both
+  sides of a rename: `.env*`, `*.pem`, `*.key`, `id_rsa*` / `id_ed25519*`,
+  `.ssh/`, `.aws/`, `.codex/`, `credentials*`, `secrets*`.
+  - Changed files with such names are left out of `git()` listings.
+  - A symlink inside the repo that points at a secret file is not caught. That
+    is a documented limitation.
+- **Caps:** `read_file` returns at most 64 KB and a patch at most 32 KB, with a
+  note when the output is cut.
+
+### 4.8 UI
+
+- **Panel:** a "Phreak" thread panel tab (`app.slots.experimental_tab`). It
+  has:
+  - a Start/End button and mute
+  - a status line: connecting, listening, thinking, speaking, reconnecting or
+    ended, plus latency
   - live captions for both sides
-  - tool activity lines, for example "read git diff"
-  - the log of sent messages, with undo for queued ones
-  - mute, push-to-talk and end controls
-- **Audio engine:** lives in `app.slots.experimental_appOverlay`, mounted once
-  per window. Audio keeps running when you close the panel or switch threads. A
-  small floating chip then offers mute, end and a way back.
-- **Entry points:**
-  - a header button (`experimental_threadAction`, placement `header`)
-  - a palette command, "Phreak: start or end", with a default shortcut that does
-    not collide with Voice Mode's Ctrl+Shift+V. Rebindable.
-- **One session at a time per bb server**, across windows and devices. Starting
-  a new one ends the old one with a notice, so two sessions can never send to
-  the same thread.
+  - a result line per send or stop: sent, queued, refused, or delivery unknown,
+    with the exact text
 - **Untouched:** bb's composer, send button and mic.
-- **Remote use:** Phreak must work through the bb Connect URL.
-  - The browser opens the same-origin route
-    `/api/v1/plugins/phreak/http/session`, as Voice Mode does.
-  - The route's `local` auth runs the same origin guard as bb's own API routes
-    (`browserRequestProblem` in bb's server). That guard already works over
-    Connect, so it should pass. M0 confirms it.
+- **Remote use:** the browser opens the same-origin route
+  `/api/v1/plugins/phreak/http/session?threadId=…` with the default `local`
+  auth. That route runs the same origin guard as bb's own API, which already
+  works over bb Connect.
 
-### 4.7 Storage, limits and privacy
+### 4.9 Privacy
 
-- **Stored:** in SQLite under the plugin's data dir, per thread: sessions,
-  transcripts, gated tool calls and sent messages. Reconnect and rollover read
-  from it. Audio and tool outputs are never stored.
-- **Sent to the provider** while a session runs: mic audio, the thread digest,
-  and whatever file or git content the tools read, within the confinement
-  above. Nothing goes out before you start a session.
-- **Limits:**
-  - A session ends after 10 minutes of silence, or 20 minutes while an agent
-    turn you sent is running.
-  - A hard cap of 60 minutes applies across rollovers. It is configurable.
+While a session runs, the provider receives:
 
-### 4.8 Settings
+- mic audio
+- the digest
+- whatever the tools read, within the confinement above
 
-| Setting | Default |
-| --- | --- |
-| `connectionPlugin` | `codex-realtime` |
-| `voice` | `marin` |
-| `turnDetection` | `semantic_vad` (or `server_vad`, `manual` for push-to-talk) |
-| `vadEagerness` | `auto` |
-| `announceTurns` | on |
-| `idleMinutes` | 10 (20 while a sent turn runs) |
-| `maxSessionMinutes` | 60 |
-| `contextBudgetTokens` | 40000 |
+Nothing goes out before Start, and nothing is stored.
 
 ## 5. Not in v1
 
-- Writing files or running commands. The thread's agent does that.
-- Handing deep questions to a hidden fork of the thread (the side-chat
-  pattern). This is the main v2 candidate.
-- An OpenAI API key provider, and WebRTC audio.
-- Composer drafts and send confirmation. Possible later as a setting.
-- Content search across files.
+- Persistence, voice history, resume summaries, automatic session rollover.
+- Overlay, floating chip, keyboard shortcut, header button, tool activity feed.
+- Spoken turn announcements, undo for queued messages, push-to-talk, settings.
+- Writing files, running commands, content search, a hidden-fork delegate, an
+  API-key provider, WebRTC.
+- Unit tests.
 
-## 6. Milestones
+## 6. Build plan
 
-| Milestone | Scope | Done when |
+| Slice | Scope | Done when |
 | --- | --- | --- |
-| **M0 Spike** | Scaffold, connection through `codex-realtime`, binary relay. Measure latency locally and through Connect, bare and with a 40k digest loaded. Check worklet vs CSP and route auth over Connect. | The model talks back over the Codex sign-in, latency numbers are written down, and the capture path is chosen. |
-| **M1 Talk with context** | Panel and overlay engine, thread digest, live updates via the row map, `read_thread`, barge-in. SQLite store, reconnect and rollover. Idle limit, hard cap, one session per server. | A 15-minute discussion about a real thread works, recalls earlier options correctly, and survives a forced reconnect. |
-| **M2 Act** | Read tools with confinement, `send_to_chat`, `stop_agent`, the gate, announcements, sent log with undo. | The flow in section 1 works end to end. Manual checks show that gated calls are refused in follow-up and out-of-band responses, that a second gated call for the same utterance is refused, and that reads outside the workspace or of secret files are refused. |
-| **M3 Harden** | Voice history and resume summary, settings polish, content search (if wanted), README, tagged release, install line. | Installs from git on a clean bb, typecheck and build pass, and the owner uses it for a week. |
+| **1 Talk** | Package, protocol, panel, audio both ways, the provider connection with error categories, digest and updates, barge-in, lifecycle and limits. | Over bb Connect, you can discuss a real thread, interrupt Phreak, and it recalls earlier options correctly. Latency is noted. |
+| **2 Read** | `read_thread`, `list_threads`, `agent_status`, `read_file`, `git`, with confinement. | Lookups answer correctly, and reads outside the root or of secret names are refused. |
+| **3 Act** | `send_to_chat`, `stop_agent`, the gate, result lines. | The flow in section 1 works end to end. "What did the diff say?" over a diff containing "send this" sends nothing. |
+
+The checks are `tsc --noEmit`, `bb plugin build`, and the manual checks above.
 
 ## 7. Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| OpenAI stops accepting the Codex sign-in for Realtime. | The provider is a plugin contract. Switch to another `realtimeConnection` plugin by setting; an API key provider is a small v2 addition. |
-| `experimental_` SDK APIs change. | Pin the SDK, keep the bb surface in one module, and re-test on each bb update. |
-| The voice model drifts when writing a message. | The panel shows the exact sent text, queued messages can be undone, and "stop it" stops a turn. |
-| Instructions hidden in thread, file or git content. | The gate limits where and how often gated calls happen, reads are confined to the workspace and secrets are denied, and M2 checks it by hand. A send on an utterance that did not ask for one remains possible (section 4.4). |
-| Latency through the Connect tunnel, or from a large context prefix. | Measure both in M0, tune the digest budget, and revisit WebRTC if needed. |
-| Cost against the ChatGPT plan. | Idle limit, hard cap, and no session until you start one. |
+| OpenAI stops accepting the Codex sign-in for Realtime. | The provider is a plugin contract. Another `realtimeConnection` plugin, or a small API-key provider, can replace it. |
+| `experimental_` SDK APIs change. | Pin the SDK and re-check on each bb update. |
+| The voice model writes the wrong message. | The panel shows the exact text, and "stop it" stops the turn. |
+| Instructions injected into context. | The intent check, mutations bound to the session's thread, and read confinement. |
+| Latency through bb Connect. | Measured in slice 1. WebRTC is the fallback plan. |
 
 ## 8. Credits
 
