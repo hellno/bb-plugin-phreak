@@ -99,9 +99,10 @@ is not committed.
     plugins")
   - the provider reported a sign-in problem (its own message, such as "run
     `codex login`")
-  - OpenAI refused the connection after one refresh (sign-in expired, plan, or
-    model; the message names the model and says to run `codex`)
-  - a network failure
+  - the connection failed after one refresh: OpenAI refused it (sign-in
+    expired, plan, or model) or the network failed. These can't be told apart
+    without the HTTP status, so one message names the model and says to run
+    `codex`.
 - **Setup:** `codex-realtime` gives the sign-in only to plugins on its
   allow-list. Append `phreak` to the existing list; don't replace it. Check
   the current value with `bb plugin config codex-realtime`, then set, for

@@ -1,4 +1,4 @@
-// Phreak's panel (SPEC §4.8): Start/End, mute, status, live captions and one
+// Phreak's panel (SPEC §4.7): Start/End, mute, status, live captions and one
 // result line per send or stop, for the thread it sits beside.
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import {
@@ -8,26 +8,19 @@ import {
   type ExperimentalThreadTabProps,
 } from "@get-bb/plugin-sdk/app";
 import { SessionAudio } from "./audio";
-import {
-  PLUGIN_ID,
-  SESSION_PATH,
-  type ClientMessage,
-  type Delivery,
-  type ServerMessage,
-  type SessionState,
-} from "./protocol";
-
-const MAX_ENTRIES = 100;
+import { PLUGIN_ID, SESSION_PATH } from "./protocol";
+import type { ClientMessage, Delivery, ServerMessage, SessionState } from "./protocol";
 
 type CaptionMessage = Extract<ServerMessage, { type: "caption" }>;
 type ActionMessage = Extract<ServerMessage, { type: "action" }>;
-/** Server messages the view renders; audio and `ended` are handled by Session. */
-type ViewMessage = Exclude<ServerMessage, { type: "audio_start" | "interrupt" | "ended" }>;
 
-type SessionEvent =
-  | { type: "message"; message: ViewMessage }
+/** Everything the panel reacts to: server messages as they arrive, plus local events. */
+type PanelEvent =
+  | ServerMessage
+  | { type: "start" }
+  | { type: "mute"; muted: boolean }
   | { type: "playing"; playing: boolean }
-  | { type: "closed"; reason: string };
+  | { type: "latency"; ms: number };
 
 // Same-origin route, as in Voice Mode's session.ts (steveafrost/bb-plugin-voice-mode, MIT).
 function sessionUrl(threadId: string): string {
@@ -42,21 +35,18 @@ class Session {
   private readonly audio: SessionAudio;
   private readonly ws: WebSocket;
   private opened = false;
-  private muted = false;
   private closed = false;
+  private thinkingAt: number | null = null; // when your speech ended, until the reply is audible
 
   // Must run inside the Start click: SessionAudio needs the user gesture.
   constructor(
     threadId: string,
-    private readonly emit: (event: SessionEvent) => void,
+    private readonly emit: (event: PanelEvent) => void,
   ) {
     this.audio = new SessionAudio((playing) => this.report({ type: "playing", playing }));
     this.ws = new WebSocket(sessionUrl(threadId));
     this.ws.binaryType = "arraybuffer";
-    this.ws.onopen = () => {
-      this.opened = true;
-      if (this.muted) this.send({ type: "mute", muted: true });
-    };
+    this.ws.onopen = () => (this.opened = true);
     this.ws.onmessage = (event) => this.receive(event.data);
     this.ws.onclose = (event) =>
       this.close(event.reason || (this.opened ? "The connection to Phreak closed." : "Could not reach the Phreak server."));
@@ -64,13 +54,11 @@ class Session {
       .startMic((frame) => {
         if (this.ws.readyState === WebSocket.OPEN) this.ws.send(frame);
       })
-      .catch((error: unknown) => this.end(`Microphone unavailable: ${errorText(error)}`));
+      .catch((error: unknown) => this.end(`Microphone unavailable: ${error instanceof Error ? error.message : error}`));
   }
 
-  setMuted(muted: boolean): void {
-    this.muted = muted;
-    this.audio.setMuted(muted);
-    this.send({ type: "mute", muted });
+  mute(muted: boolean): void {
+    this.audio.muted = muted;
   }
 
   /** Ends the session from this side; the server is told first. */
@@ -80,149 +68,108 @@ class Session {
   }
 
   private receive(data: unknown): void {
-    if (data instanceof ArrayBuffer) return this.audio.play(data);
-    const message = parseMessage(data);
-    if (message === null) return;
+    if (data instanceof ArrayBuffer) return this.play(data);
+    let message: ServerMessage;
+    try {
+      message = JSON.parse(String(data)) as ServerMessage;
+    } catch {
+      return;
+    }
     switch (message.type) {
       case "audio_start":
         return this.audio.startItem(message.itemId);
-      case "interrupt": {
-        const heard = this.audio.interrupt();
-        if (heard !== null) this.send({ type: "played", ...heard });
-        return;
-      }
+      case "interrupt":
+        this.thinkingAt = null;
+        return this.send({ type: "played", items: this.audio.flush() });
       case "ended":
         return this.close(message.reason);
-      default:
-        this.report({ type: "message", message });
+      case "status":
+        if (message.state === "thinking") this.thinkingAt = performance.now();
     }
+    this.report(message);
+  }
+
+  private play(pcm: ArrayBuffer): void {
+    const onset = this.audio.play(pcm);
+    if (onset === null || this.thinkingAt === null) return;
+    // Measured to the first audible sample, not the first byte (SPEC §4.2).
+    this.report({ type: "latency", ms: Math.round(performance.now() - this.thinkingAt + onset * 1000) });
+    this.thinkingAt = null;
   }
 
   private send(message: ClientMessage): void {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message));
   }
 
-  private report(event: SessionEvent): void {
+  // Once closed, nothing from this session (late socket or audio events) reaches the panel.
+  private report(event: PanelEvent): void {
     if (!this.closed) this.emit(event);
   }
 
   private close(reason: string): void {
     if (this.closed) return;
     this.closed = true;
-    // Detached first, so a dying socket can never touch the next session's view.
-    this.ws.onopen = null;
-    this.ws.onmessage = null;
-    this.ws.onclose = null;
     this.ws.close();
     this.audio.close();
-    this.emit({ type: "closed", reason });
+    this.emit({ type: "ended", reason });
   }
 }
 
-function parseMessage(data: unknown): ServerMessage | null {
-  try {
-    return JSON.parse(String(data)) as ServerMessage;
-  } catch {
-    return null;
-  }
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-type Entry =
-  | { kind: "caption"; key: string; role: CaptionMessage["role"]; text: string; final: boolean }
-  | { kind: "action"; key: string; action: ActionMessage };
+type Entry = (CaptionMessage | ActionMessage) & { key: string };
 
 interface View {
-  live: boolean;
-  state: SessionState | null; // null until the first Start
-  detail: string | null;
+  state: SessionState | "ended" | null; // null until the first Start
+  detail: string | null; // the status detail, or why the session ended
   latencyMs: number | null;
   playing: boolean;
   muted: boolean;
-  entries: Entry[];
-  seq: number;
+  entries: Entry[]; // the session's whole transcript: sessions are capped at 60 minutes
   error: string | null;
-  endReason: string | null;
 }
 
-const IDLE: View = {
-  live: false,
-  state: null,
-  detail: null,
-  latencyMs: null,
-  playing: false,
-  muted: false,
-  entries: [],
-  seq: 0,
-  error: null,
-  endReason: null,
-};
+const IDLE: View = { state: null, detail: null, latencyMs: null, playing: false, muted: false, entries: [], error: null };
 
-type ViewEvent = SessionEvent | { type: "start" } | { type: "mute"; muted: boolean };
-
-function reduce(view: View, event: ViewEvent): View {
+function reduce(view: View, event: PanelEvent): View {
   switch (event.type) {
     case "start":
-      return { ...IDLE, live: true, state: "connecting" };
+      return { ...IDLE, state: "connecting" };
     case "mute":
       return { ...view, muted: event.muted };
     case "playing":
       return { ...view, playing: event.playing };
-    case "closed":
-      return { ...view, live: false, state: "ended", detail: null, playing: false, muted: false, endReason: event.reason };
-    case "message":
-      return applyMessage(view, event.message);
-  }
-}
-
-function applyMessage(view: View, message: ViewMessage): View {
-  switch (message.type) {
-    case "status":
-      return { ...view, state: message.state, detail: message.detail ?? null };
     case "latency":
-      return { ...view, latencyMs: message.ms };
+      return { ...view, latencyMs: event.ms };
+    case "status":
+      return { ...view, state: event.state, detail: event.detail ?? null };
     case "error":
-      return { ...view, error: message.message };
+      return { ...view, error: event.message };
     case "caption":
-      return { ...view, entries: upsertCaption(view.entries, message) };
+      return { ...view, entries: upsertCaption(view.entries, event) };
     case "action":
-      return {
-        ...view,
-        seq: view.seq + 1,
-        entries: append(view.entries, { kind: "action", key: `a:${view.seq}`, action: message }),
-      };
+      return { ...view, entries: [...view.entries, { ...event, key: `a:${view.entries.length}` }] };
+    case "ended":
+      return { ...view, state: "ended", detail: event.reason, playing: false, muted: false };
+    default:
+      return view; // audio_start and interrupt only concern the session's audio
   }
 }
 
-function upsertCaption(entries: Entry[], { itemId, role, text, final }: CaptionMessage): Entry[] {
-  const next: Entry = { kind: "caption", key: `c:${itemId}`, role, text, final };
+// Keyed by item, so an empty caption sent at commit holds the utterance's place until its text arrives.
+function upsertCaption(entries: Entry[], caption: CaptionMessage): Entry[] {
+  const next: Entry = { ...caption, key: `c:${caption.itemId}` };
   const index = entries.findIndex((entry) => entry.key === next.key);
-  if (index === -1) return append(entries, next);
+  if (index === -1) return [...entries, next];
   const current = entries[index];
-  if (current.kind === "caption" && current.final && !final) return entries;
+  if (current.type === "caption" && current.final && !caption.final) return entries;
   return entries.map((entry, i) => (i === index ? next : entry));
 }
-
-function append(entries: Entry[], entry: Entry): Entry[] {
-  return [...entries, entry].slice(-MAX_ENTRIES);
-}
-
-const STATE_LABEL: Record<SessionState, string> = {
-  connecting: "Connecting…",
-  listening: "Listening",
-  thinking: "Thinking…",
-  speaking: "Speaking",
-  reconnecting: "Reconnecting…",
-  ended: "Ended",
-};
 
 const DELIVERY_LABEL: Record<Delivery, string> = {
   sent: "Sent",
   queued: "Queued",
+  submitted: "Submitted; the agent may still decline",
   stopped: "Stopped",
+  stopping: "Stopping; not settled yet",
   refused: "Refused",
   unknown: "Delivery unknown",
   failed: "Failed",
@@ -243,6 +190,7 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   const visible = experimental_useTabVisible();
   const [view, dispatch] = useReducer(reduce, IDLE);
   const session = useRef<Session | null>(null);
+  const live = view.state !== null && view.state !== "ended";
 
   const end = useCallback((reason: string) => {
     session.current?.end(reason);
@@ -250,15 +198,13 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   }, []);
 
   const start = () => {
-    end("Restarted.");
+    session.current = new Session(threadId, dispatch); // first: it can throw, e.g. without 24 kHz audio support
     dispatch({ type: "start" });
-    session.current = new Session(threadId, dispatch);
   };
 
   const toggleMute = () => {
-    const muted = !view.muted;
-    session.current?.setMuted(muted);
-    dispatch({ type: "mute", muted });
+    session.current?.mute(!view.muted);
+    dispatch({ type: "mute", muted: !view.muted });
   };
 
   // The panel owns the mic: bb keeps hidden tabs mounted, so hiding ends the
@@ -268,31 +214,34 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   }, [visible, end]);
   useEffect(() => () => end("The Phreak panel was closed."), [end]);
 
+  // The server says "listening" once it has sent the audio; playback can lag behind.
+  const state = view.state === "listening" && view.playing ? "speaking" : view.state;
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-3 text-sm">
       <div className="flex items-center gap-2">
-        {view.live ? (
-          <button type="button" className={`${BUTTON} ${DESTRUCTIVE}`} onClick={() => end("You ended the session.")}>
-            <Icon name="Square" className="size-4" />
-            End
-          </button>
-        ) : (
-          <button type="button" className={`${BUTTON} ${PRIMARY}`} onClick={start}>
-            <Icon name="Mic" className="size-4" />
-            Start
-          </button>
-        )}
+        <button
+          type="button"
+          className={`${BUTTON} ${live ? DESTRUCTIVE : PRIMARY}`}
+          onClick={live ? () => end("You ended the session.") : start}
+        >
+          <Icon name={live ? "Square" : "Mic"} className="size-4" />
+          {live ? "End" : "Start"}
+        </button>
         <button
           type="button"
           className={`${BUTTON} ${OUTLINE}`}
           aria-pressed={view.muted}
-          disabled={!view.live}
+          disabled={!live}
           onClick={toggleMute}
         >
           {view.muted ? "Unmute" : "Mute"}
         </button>
       </div>
-      <StatusLine view={view} />
+      <p className="text-muted-foreground" aria-live="polite">
+        {state === null ? "Press Start to talk this thread through." : state[0].toUpperCase() + state.slice(1)}
+        {view.detail ? ` · ${view.detail}` : null}
+        {view.latencyMs === null ? null : ` · latency ${view.latencyMs} ms`}
+      </p>
       {view.error === null ? null : (
         <p role="alert" className="break-words text-destructive">
           {view.error}
@@ -301,37 +250,18 @@ function PhreakPanel({ threadId }: { threadId: string }) {
       <div className="flex min-h-0 flex-1 flex-col-reverse overflow-y-auto">
         <ol className="flex flex-col gap-3">
           {view.entries.map((entry) =>
-            entry.kind === "caption" ? (
-              entry.text === "" ? null : <CaptionLine key={entry.key} entry={entry} />
-            ) : (
-              <ActionLine key={entry.key} action={entry.action} threadId={threadId} />
+            entry.type === "action" ? (
+              <ActionLine key={entry.key} action={entry} threadId={threadId} />
+            ) : entry.text === "" ? null : (
+              <li key={entry.key}>
+                <div className="text-xs font-medium text-muted-foreground">{entry.role === "user" ? "You" : "Phreak"}</div>
+                <p className={entry.final ? "break-words" : "break-words text-muted-foreground"}>{entry.text}</p>
+              </li>
             ),
           )}
         </ol>
       </div>
     </div>
-  );
-}
-
-function StatusLine({ view }: { view: View }) {
-  // The server says "listening" once it has sent the audio; playback can lag behind.
-  const state = view.state === "listening" && view.playing ? "speaking" : view.state;
-  const extra = view.live ? view.detail : view.endReason;
-  return (
-    <p className="text-muted-foreground" aria-live="polite">
-      {state === null ? "Press Start to talk this thread through." : STATE_LABEL[state]}
-      {extra ? ` · ${extra}` : null}
-      {view.latencyMs === null ? null : ` · latency ${view.latencyMs} ms`}
-    </p>
-  );
-}
-
-function CaptionLine({ entry }: { entry: Extract<Entry, { kind: "caption" }> }) {
-  return (
-    <li>
-      <div className="text-xs font-medium text-muted-foreground">{entry.role === "user" ? "You" : "Phreak"}</div>
-      <p className={entry.final ? "break-words" : "break-words text-muted-foreground"}>{entry.text}</p>
-    </li>
   );
 }
 
