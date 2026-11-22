@@ -94,6 +94,7 @@ class Session {
         return this.audio.startItem(message.itemId);
       case "interrupt":
         this.thinkingAt = null;
+        this.audio.cue(null);
         this.send({ type: "played", items: this.audio.flush() });
         break;
       case "draft":
@@ -203,6 +204,9 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   const composer = useComposer();
   const session = useRef<Session | null>(null);
   const live = view.state !== null && view.state !== "ended";
+  useEffect(() => {
+    if (!live) session.current = null;
+  }, [live]);
 
   const end = useCallback((reason: string) => {
     session.current?.end(reason);
@@ -239,7 +243,7 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   // The server says "listening" once it has sent the audio; playback can lag behind.
   const state = view.state === "listening" && view.playing ? "speaking" : view.state;
   // A soft pulse once a reply is 700 ms late; a sparse tick while lookups run and nobody speaks.
-  const cue = state === "thinking" ? "wait" : state === "listening" && !view.talking && view.lookups > 0 ? "lookup" : null;
+  const cue = state === "thinking" && !view.talking ? "wait" : state === "listening" && !view.talking && view.lookups > 0 ? "lookup" : null;
   useEffect(() => {
     if (cue === null) return;
     const timer = setTimeout(() => session.current?.cue(cue), cue === "wait" ? 700 : 0);

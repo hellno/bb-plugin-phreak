@@ -192,11 +192,13 @@ function rowLine(row: TimelineRow): string {
 export class Lookups {
   private readonly running = new Map<string, AbortController>(); // fork id → its lookup
   private inFlight = 0; // unlike `running`, counts lookups whose fork is not made yet
+  private generation = 0; // bumped when owed answers are discarded
   private closed = false;
 
   constructor(private readonly bb: BbPluginApi, private readonly threadId: string, private readonly onCount: (running: number) => void) {}
 
   async ask(question: string): Promise<string> {
+    const generation = this.generation;
     this.onCount(++this.inFlight);
     const lookup = new AbortController();
     let forkId: string | null = null;
@@ -212,7 +214,7 @@ export class Lookups {
         input: [{ type: "text", text: `${LOOKUP_PREAMBLE}\n\nQuestion: ${question}`, mentions: [] }],
       });
       this.running.set((forkId = fork.id), lookup);
-      if (this.closed) lookup.abort(new Error("the session ended"));
+      if (generation !== this.generation) lookup.abort(new Error(this.closed ? "the session ended" : "the voice connection was replaced"));
       // Polls the fork's status, so a turn that finished before we knew its id still counts.
       await this.bb.sdk.threads.wait({ threadId: forkId, status: "idle", timeoutMs: LOOKUP_TIMEOUT_MS, signal: lookup.signal });
       const { output } = await this.bb.sdk.threads.output({ threadId: forkId, signal: lookup.signal });
@@ -230,9 +232,15 @@ export class Lookups {
     this.running.get(threadId)?.abort(new Error("it stopped on a question or permission request"));
   }
 
+  /** Stops every lookup in flight: a reconnect discards the answers owed to the old conversation. */
+  cancelAll(reason: string): void {
+    this.generation++;
+    for (const lookup of this.running.values()) lookup.abort(new Error(reason));
+  }
+
   close(): void {
     this.closed = true;
-    for (const lookup of this.running.values()) lookup.abort(new Error("the session ended"));
+    this.cancelAll("the session ended");
   }
 
   /** Stop before archive: archive alone lets running work go on through its undo grace period. */

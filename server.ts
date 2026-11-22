@@ -239,6 +239,7 @@ class Session {
     if (this.reconnected) return this.end("The voice connection dropped again.", detail);
     this.reconnected = true;
     a.close();
+    this.lookups.cancelAll("the voice connection was replaced");
     // Its audio belongs to the dead conversation. Without the browser's report, what it may not have played stays out of the recap.
     this.flushed = this.ask("played", { type: "interrupt" }).then((answer) => {
       if (!answer) for (const itemId of this.unconfirmed) this.line(itemId, "Phreak").heard = 0;
