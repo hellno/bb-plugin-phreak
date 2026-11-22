@@ -1,15 +1,12 @@
-// Mic capture and assistant playback for one Phreak session (SPEC §4.2).
-// The 24 kHz context, zero-filled mute and gapless playback are adapted from
-// Voice Mode's audio.ts (steveafrost/bb-plugin-voice-mode, MIT).
-import { SAMPLE_RATE } from "./protocol";
+// Mic capture and assistant playback for one Phreak session. The 24 kHz
+// context and gapless playback are adapted from Voice Mode's audio.ts
+// (steveafrost/bb-plugin-voice-mode, MIT).
+import { SAMPLE_RATE, type ClientMessage } from "./protocol";
 
 const FRAME_SAMPLES = (SAMPLE_RATE * 40) / 1000; // one 40 ms mic frame
 const FALLBACK_FRAME_SAMPLES = 1024; // ScriptProcessor sizes are powers of two: ~43 ms
 const MAX_AHEAD_SECONDS = 60; // the relay sends faster than real time; replies are meant to be short
 const START_LEAD_SECONDS = 0.03; // lets the first chunk of a burst start cleanly
-
-/** How much of an assistant audio item was heard, for `played`. */
-export type Heard = { itemId: string; ms: number };
 
 /** Context seconds during which part of an item is scheduled to play. */
 type Span = { start: number; end: number };
@@ -38,16 +35,13 @@ registerProcessor("${WORKLET_NAME}", class extends AudioWorkletProcessor {
 `;
 
 /**
- * Everything audio for one session, on one context at the wire rate so the
- * browser does all resampling. Construct it synchronously inside the Start
- * click handler: Safari and mobile browsers only let a user gesture start an
- * AudioContext.
+ * Everything audio for one session, on one context at the wire rate so the browser does all resampling.
+ * Construct it inside the Start click: Safari and mobile browsers only let a user gesture start an AudioContext.
  */
 export class SessionAudio {
-  /** Muted, the mic still sends frames, as zeros, so voice detection hears your turn end. */
-  muted = false;
   private readonly ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   private stream: MediaStream | null = null;
+  private muted = false;
   private closed = false;
   private readonly sources = new Set<AudioBufferSourceNode>();
   private readonly items = new Map<string, Span[]>(); // since the last flush, in arrival order
@@ -59,19 +53,24 @@ export class SessionAudio {
     this.ctx.resume().catch(() => undefined);
   }
 
+  /** Muted, the track sends silence: frames keep flowing, so voice detection hears your turn end. */
+  setMuted(muted: boolean): void {
+    this.muted = muted;
+    for (const track of this.stream?.getAudioTracks() ?? []) track.enabled = !muted;
+  }
+
   /** Asks for the mic, then streams PCM16 frames of about 40 ms to `onFrame` until close. */
   async startMic(onFrame: (pcm: ArrayBuffer) => void): Promise<void> {
     if (!navigator.mediaDevices) throw new Error("this page is not served over https or localhost");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
+    const audio = { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    const stream = await navigator.mediaDevices.getUserMedia({ audio });
     // The session may have ended while the permission prompt was open.
     if (this.closed) return stopTracks(stream);
     this.stream = stream;
-    const capture = await this.captureNode((samples) => onFrame(toPcm16(samples, this.muted)));
+    this.setMuted(this.muted); // a mute pressed while the permission prompt was open
+    const capture = await this.captureNode((samples) => onFrame(toPcm16(samples)));
     if (this.closed) return;
-    const sink = this.ctx.createGain();
-    sink.gain.value = 0; // capture nodes only run while something downstream pulls them
+    const sink = new GainNode(this.ctx, { gain: 0 }); // capture nodes only run while something downstream pulls them
     this.ctx.createMediaStreamSource(stream).connect(capture).connect(sink).connect(this.ctx.destination);
   }
 
@@ -116,9 +115,9 @@ export class SessionAudio {
   }
 
   /** Stops all playback and reports how much was heard of every unfinished item (0 if none). */
-  flush(): Heard[] {
+  flush(): ClientMessage["items"] {
     const now = this.audibleTime();
-    const heard: Heard[] = [];
+    const heard: ClientMessage["items"] = [];
     for (const [itemId, spans] of this.items) {
       if (!this.unfinished(itemId, spans, now)) continue;
       const seconds = spans.reduce((sum, s) => sum + Math.min(Math.max(now - s.start, 0), s.end - s.start), 0);
@@ -177,9 +176,8 @@ export class SessionAudio {
   }
 }
 
-function toPcm16(samples: Float32Array, silent: boolean): ArrayBuffer {
+function toPcm16(samples: Float32Array): ArrayBuffer {
   const pcm = new Int16Array(samples.length);
-  if (silent) return pcm.buffer;
   for (let i = 0; i < samples.length; i++) {
     const s = Math.max(-1, Math.min(1, samples[i]));
     pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
