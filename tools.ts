@@ -195,6 +195,9 @@ export class Lookup {
           lifecycleOwnerThreadId: this.threadId,
           visibility: "hidden",
           title: "Phreak lookup",
+          // bb's default mode (workspace sandbox, provider auto-review), never inheriting
+          // "full". "accept-edits" would ask approval even for read-only commands.
+          permissionMode: "auto",
           input,
         });
         forkId = this.forkId = fork.id;

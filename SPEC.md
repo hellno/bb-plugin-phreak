@@ -1,6 +1,8 @@
 # Phreak spec
 
-Status: v0.3, 2026-11-22. Lean v1, challenged for bloat and bugs; being built.
+Status: v0.3, 2026-11-22. Implemented as plugin v0.1. A scripted spoken test
+through the server passed on 2026-11-22: reply, lookup, gated send, about
+0.8 s to first audio byte. The browser panel is untested.
 
 ## 1. What Phreak is
 
@@ -154,8 +156,7 @@ unchecked. Usage counts against the ChatGPT plan.
 ### 4.3 Session lifecycle
 
 - **One session per bb server.**
-  - Each session has an immutable `sessionId`, `threadId` and `projectId`, fixed
-    at start.
+  - Each session has an immutable `sessionId` and `threadId`, fixed at start.
   - A new Start takes over: the old session is invalidated first, and its
     sockets close.
 - **Invalidation is checked at every await boundary that can act.** Before any
@@ -220,8 +221,12 @@ has four tools:
   `ask_agent`, and you can keep talking while the fork works. The answer is
   delivered whenever it arrives.
 
-**The fork's powers.** bb gives plugins no read-only or plan mode for a fork,
-so the fork has the main agent's permissions in the same workspace.
+**The fork's powers.** bb gives plugins no read-only or plan mode for a fork.
+
+- The fork runs in `auto`, bb's default: workspace sandbox with the provider's
+  automatic review. It never inherits `full`.
+- `accept-edits` was tried. Codex then asks approval even for read-only
+  commands such as `git ls-tree`, which stalls every lookup.
 
 - Every question carries a fixed prefix: it is a read-only lookup, so the agent
   must not change files, run state-changing commands, or message anyone, and

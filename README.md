@@ -23,7 +23,9 @@ into the thread.
   stop working at any time; see
   [the risk note](SPEC.md#41-provider-codex-through-realtimeconnection).
 
-**Status:** being built. See [SPEC.md](SPEC.md).
+**Status:** v0.1. A scripted spoken test through the server passed: a spoken
+reply, a lookup, and a gated send, with about 0.8 s to first audio. The browser
+panel is still untested. See [SPEC.md](SPEC.md).
 
 ## Setup
 
