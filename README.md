@@ -16,7 +16,9 @@ into the thread.
 - **Runs on your ChatGPT plan.** The voice comes from OpenAI Realtime through
   the Codex sign-in, via the
   [`codex-realtime`](https://github.com/gpambrozio/bb-plugins/tree/main/codex-realtime)
-  plugin. Any plugin that offers a `realtimeConnection` works too.
+  plugin. Any plugin that offers a `realtimeConnection` works too. OpenAI does
+  not document this use of the ChatGPT sign-in, so it may stop working at any
+  time; see [the risk note](SPEC.md#41-provider-codex-through-realtimeconnection).
 
 **Status:** spec stage, nothing to install yet. See [SPEC.md](SPEC.md).
 

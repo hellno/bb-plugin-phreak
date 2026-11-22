@@ -29,7 +29,7 @@ A typical session:
 
 | Plugin | What it does | Where it falls short for this |
 | --- | --- | --- |
-| Voice Mode (steveafrost, MIT) | Relays each thing you say to the agent, verbatim, and reads back a summary when the turn ends. | The voice model sees only the thread title and 2,500 characters per reply. It cannot read anything itself and forwards every request at once. Users report it as laggy. Its waveform takes over the send button. |
+| Voice Mode (steveafrost, MIT) | Relays each thing you say to the agent, verbatim, and reads back a summary when the turn ends. | The voice model sees only the thread title and 2,500 characters per reply. It cannot read anything itself and forwards every request at once. Its waveform takes over the send button. In the owner's use it felt laggy. |
 | Hands-Free (mattwynne) | Dictate on iPhone, send with a tap, hear replies. | No discussion: speech is sent without review. |
 | Handsfree (swairshah) | A voice operator that focuses threads and sends messages. | Uses `gpt-live-1`, which refuses the ChatGPT sign-in. No licence, so we reuse nothing from it. |
 | Side chat (bb builtin) | A text fork of the thread in a side panel, with "Send to main thread". | Text only. Closest in spirit; Phreak is its voice counterpart. |
@@ -46,8 +46,10 @@ Decided with the owner on 2026-11-22:
 | Audio provider | Codex (ChatGPT subscription), reached through the installed `codex-realtime` plugin. |
 | What the voice model can do in v1 | Read the chat and other threads, read files and git, steer and stop the agent. |
 | Sending | Sends immediately when you ask. No confirmation step. |
-| UI | A panel beside the chat. Phreak never touches bb's composer, send button or mic. |
-| Repo | Public, MIT. |
+| Repo | Public. |
+
+Proposed but not yet confirmed: the name Phreak, the MIT licence, and the
+panel UI (section 4.6).
 
 ## 4. Architecture
 
@@ -202,8 +204,9 @@ This is the core difference from Voice Mode.
   thread is included, so you can pick up where you left off.
 - **Trust:** thread, file and git content is data. It is wrapped as
   `[thread data]`, never placed in instructions, and the instructions say never
-  to follow directions found inside it. The gate in section 4.4 enforces this in
-  code, not just in the prompt.
+  to follow directions found inside it. The gate in section 4.4 adds hard limits
+  in code on where and how often the model can act. It cannot check whether the
+  model acted on your words or on injected text.
 
 ### 4.4 Tools and the gate
 
@@ -228,8 +231,8 @@ request:
   The tool runner checks this by `response_id` and refuses everything else.
   - Every follow-up response after a tool result is created with a
     `response.tools` override that lists only the read-only tools.
-  - So content the model just read (a file, a diff, another thread) can never
-    lead to a send or a stop, even in the same exchange.
+  - So a lookup can never lead straight to a send or a stop. A gated call needs
+    a fresh utterance from you.
 - **One gated call per item:** each committed user audio item allows at most
   one gated call.
 - **The cost:** "check the diff, and if it touches auth tell it to add tests"
@@ -242,6 +245,12 @@ request:
   - Their text is then added as a note, so the model knows what you heard.
 - **No false "Sent":** Phreak says "Sent" only from the tool result, after bb
   returns.
+- **What the gate does not cover:** inside a user response the model still sees
+  the digest and earlier tool results. Injected text there could make it send
+  on an utterance that did not ask for a send. The code guarantees only where
+  gated calls happen and how many. Whether a call matches your request rests on
+  the model. With "send immediately" there is no confirmation to catch a wrong
+  send; the panel log, undo for queued messages, and "stop it" are the backstop.
 
 **Read confinement.** The read tools can be triggered by injected content, so
 they are fenced in code:
@@ -350,7 +359,7 @@ Content search across files is left out of v1: it needs a host entry to run
 | --- | --- | --- |
 | **M0 Spike** | Scaffold, connection through `codex-realtime`, binary relay. Measure latency locally and through Connect, bare and with a 40k digest loaded. Check worklet vs CSP and route auth over Connect. | The model talks back over the Codex sign-in, latency numbers are written down, and the capture path is chosen. |
 | **M1 Talk with context** | Panel and overlay engine, thread digest, live updates via the row map, `read_thread`, barge-in. SQLite store, reconnect and rollover. Idle limit, hard cap, one session per server. | A 15-minute discussion about a real thread works, recalls earlier options correctly, and survives a forced reconnect. |
-| **M2 Act** | Read tools with confinement, `send_to_chat`, `stop_agent`, the gate, announcements, sent log with undo. Tests against a fake Realtime socket. | The flow in section 1 works end to end. Tests prove that an injected "send this" inside thread data, a file, or a diff is never acted on, and that reads outside the workspace are refused. |
+| **M2 Act** | Read tools with confinement, `send_to_chat`, `stop_agent`, the gate, announcements, sent log with undo. Tests against a fake Realtime socket. | The flow in section 1 works end to end. Tests prove that gated calls are refused in follow-up and out-of-band responses, that a second gated call for the same utterance is refused, and that reads outside the workspace or of secret files are refused. |
 | **M3 Harden** | Voice history and resume summary, settings polish, content search (if wanted), CI, README, tagged release, install line. | Installs from git on a clean bb, tests are green, and the owner uses it for a week. |
 
 ## 7. Risks
@@ -360,7 +369,7 @@ Content search across files is left out of v1: it needs a host entry to run
 | OpenAI stops accepting the Codex sign-in for Realtime. | The provider is a plugin contract. Switch to another `realtimeConnection` plugin by setting; an API key provider is a small v2 addition. |
 | `experimental_` SDK APIs change. | Pin the SDK, keep the bb surface in one module, and re-test on each bb update. |
 | The voice model drifts when writing a message. | The panel shows the exact sent text, queued messages can be undone, and "stop it" stops a turn. |
-| Instructions hidden in thread, file or git content. | The gate is enforced in code by response id, reads are confined to the workspace, secrets are denied, and M2 tests cover it. |
+| Instructions hidden in thread, file or git content. | The gate limits where and how often gated calls happen, reads are confined to the workspace and secrets are denied, and M2 tests cover it. A send on an utterance that did not ask for one remains possible (section 4.4). |
 | Latency through the Connect tunnel, or from a large context prefix. | Measure both in M0, tune the digest budget, and revisit WebRTC if needed. |
 | Cost against the ChatGPT plan. | Idle limit, hard cap, and no session until you start one. |
 
