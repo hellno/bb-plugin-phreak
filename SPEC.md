@@ -99,7 +99,8 @@ is not committed.
     plugins")
   - the provider reported a sign-in problem (its own message, such as "run
     `codex login`")
-  - the handshake was rejected (HTTP status and model)
+  - OpenAI refused the connection after one refresh (sign-in expired, plan, or
+    model; the message names the model and says to run `codex`)
   - a network failure
 - **Setup:** `codex-realtime` gives the sign-in only to plugins on its
   allow-list. Append `phreak` to the existing list; don't replace it. Check
@@ -121,27 +122,32 @@ unchecked. Usage counts against the ChatGPT plan.
 
 - **Upstream:** the browser sends binary frames of PCM16 mono at 24 kHz, about
   40 ms each. Capture asks for echo cancellation, noise suppression and auto
-  gain. It resamples to 24 kHz when the device runs at another rate.
+  gain. The AudioContext runs at 24 kHz, so the browser does the resampling.
+  While muted, the browser sends zeros, so voice detection still sees the
+  silence that ends your turn.
   - AudioWorklet loaded from a Blob URL, falling back to `ScriptProcessor`.
   - Voice Mode's code says bb's CSP may block worklets. A bb source checkout
     from 2026-11-07 shows no CSP on the web app.
 - **Downstream:** before the PCM of each assistant audio item, the server sends
   a JSON `audio_start { itemId }` frame. The browser tags the binary frames that
   follow with that item. It labels playback buffers at the wire rate (24 kHz),
-  counts the samples actually played per item, and caps its queue at a few
-  seconds.
+  counts the samples actually played per item, and keeps one bounded playback
+  schedule.
 - **Barge-in:**
   1. On `input_audio_buffer.speech_started`, the server sends `interrupt`.
-  2. The browser flushes playback, drops any late frames for that item, and
-     answers `played { itemId, ms }`.
-  3. The server sends `conversation.item.truncate` with those values, so the
-     model knows what you heard.
+  2. The server drops late audio from the interrupted response.
+  3. The browser flushes all playback and answers `played` with the heard
+     milliseconds of every flushed item (0 if unheard).
+  4. The server sends `conversation.item.truncate` for each of those items, so
+     the model knows exactly what you heard.
+
+  A reconnect also sends `interrupt`, so no stale audio plays.
 - **AudioContext:** created and resumed inside the Start click handler, so
   Safari and mobile browsers allow it.
 - **Echo:** speaker output can still trigger VAD. The README recommends
   headphones.
-- **Latency:** the status line shows the time from the end of your speech to the
-  first *audible* output. Targets are about 700 ms locally and about 1 s through
+- **Latency:** the browser measures the time from the server's `thinking`
+  status (sent when your speech ends) to the first *audible* output. Targets are about 700 ms locally and about 1 s through
   bb Connect.
 
 ### 4.3 Session lifecycle
@@ -161,9 +167,13 @@ unchecked. Usage counts against the ChatGPT plan.
   thread changes, or the panel unmounts. bb keeps closed tabs mounted, so this
   uses `experimental_useTabVisible()`. It also ends if mic permission resolves
   after any of those.
-- **Drops:** if the upstream socket drops, Phreak reconnects once. It re-seeds
-  the digest and the in-memory discussion as text items. If that fails, the
-  session ends visibly and Start rebuilds from bb.
+- **Drops:** if the upstream socket drops, Phreak reconnects once.
+  - It rebuilds the digest from bb and adds the recent voice discussion as text
+    items, both within the budget.
+  - If that fails, or the context overflows, the session ends visibly and Start
+    rebuilds from bb.
+  - Each connection attempt has its own state and abort signal, so a stale
+    attempt cannot touch the next one.
 - **Limits:** a session ends after 10 minutes of silence, or 20 minutes while an
   agent turn Phreak sent is running. It always ends after 60 minutes. Nothing
   is persisted.
@@ -197,9 +207,9 @@ has four tools:
 | Tool | What it does | Gated |
 | --- | --- | --- |
 | `read_thread(before?)` | Older messages of this thread (`threads.timeline`, `threads.message`). Instant. | no |
-| `ask_agent(question)` | Hands a lookup to a hidden fork of this thread, as side chat does: files, git, other threads, anything the agent can read. The fork is created on first use (`threads.fork`, hidden), reused for the rest of the session, and archived at the end. Answers take an agent turn, about 10 to 60 s, with a 3-minute timeout. | no |
-| `send_to_chat(text, now?)` | Sends `text` to this thread: `queue-if-active` by default, `steer-if-active` when `now`. If bb answers `active-turn-not-steerable`, it queues instead. | yes |
-| `stop_agent()` | `threads.stop` on this thread. | yes |
+| `ask_agent(question)` | Hands a lookup to a hidden fork of this thread, as side chat does: files, git, other threads, anything the agent can read. The fork is created on first use (`threads.fork`, hidden) and reused. One lookup runs at a time: `threads.wait` (3-minute timeout), then `threads.output`. If the fork times out or stops on a question or permission, Phreak stops and archives it, and the next lookup starts a fresh fork. Answers take an agent turn, about 10 to 60 s. | no |
+| `send_to_chat(text, now?)` | Sends `text` to this thread: `queue-if-active` by default, `steer-if-active` when `now`. A steer bb accepts is reported as `submitted`, because the agent may still decline it; there is no automatic fallback. | yes |
+| `stop_agent()` | `threads.stop` on this thread, then a status check: `stopped` once idle, otherwise `stopping`. | yes |
 
 - **Mutations** always target the session's own `threadId`; the model cannot
   choose another thread.
@@ -225,16 +235,21 @@ so the fork has the main agent's permissions in the same workspace.
 Sends and stops change the thread, so the code (not only the prompt) ties them
 to your own words.
 
-1. **Bind:** every response is bound to the committed user audio item that
-   created it. Follow-up responses after tool results inherit that binding.
-   Phreak's own bookkeeping decides this.
+1. **Bind:** automatic response creation is off. Phreak creates every response
+   itself: on `input_audio_buffer.committed`, tagged in `metadata` with that
+   item. Follow-ups after tool results carry the same tag. A gated call in a
+   response with a missing or unknown tag is refused.
 2. **Intent check:** before a gated call is dispatched, Phreak waits up to 5 s
    for that item's final input transcription. It then checks that the
-   transcription contains an intent phrase for that tool:
-   - `send_to_chat`: "send", "tell it", "tell the agent", "go ahead", "ship it"
-   - `stop_agent`: "stop", "cancel", "abort", "halt"
+   transcription is an affirmative command for that tool:
+   - It contains an intent phrase:
+     - `send_to_chat`: "send", "tell it", "tell the agent", "go ahead",
+       "ship it"
+     - `stop_agent`: "stop", "cancel", "abort", "halt"
+   - It contains no negation ("don't", "do not", "not", "never", "no").
+   - It is not a question.
 
-   The phrase list is one constant in `server.ts`.
+   The phrase lists are constants in `server.ts`.
 3. **Once:** a matching item authorizes one gated call and is then consumed.
 4. **Completed only:** a gated call is dispatched on `response.done` with status
    `completed`, never on `function_call_arguments.done`, because cancelled
@@ -242,7 +257,7 @@ to your own words.
 5. **Ownership:** the session must still be live (section 4.3).
 
 If a check fails, the tool returns a refusal ("say 'send it' to confirm") and
-the model asks you.
+the model asks you to say it plainly.
 
 So "check the diff, and if it touches auth tell it to add tests" works in one
 step: "tell it" is in your words. But "what did the diff say?" can never lead to
