@@ -73,7 +73,8 @@ The plugin is a standard bb package: `server.ts` (backend), `app.tsx`
 (frontend), with `@get-bb/plugin-sdk` pinned to the version the scaffold
 ships (0.6.157, bb ≥ 0.50). Most APIs used below are `experimental_`, so the
 pin matters. All bb calls go through one module, so an SDK change touches one
-file.
+file. The repo stays lean: no unit tests, no test framework. `tsc --noEmit` and
+`bb plugin build` are the only checks.
 
 ### 4.1 Provider: Codex through `realtimeConnection`
 
@@ -359,8 +360,8 @@ Content search across files is left out of v1: it needs a host entry to run
 | --- | --- | --- |
 | **M0 Spike** | Scaffold, connection through `codex-realtime`, binary relay. Measure latency locally and through Connect, bare and with a 40k digest loaded. Check worklet vs CSP and route auth over Connect. | The model talks back over the Codex sign-in, latency numbers are written down, and the capture path is chosen. |
 | **M1 Talk with context** | Panel and overlay engine, thread digest, live updates via the row map, `read_thread`, barge-in. SQLite store, reconnect and rollover. Idle limit, hard cap, one session per server. | A 15-minute discussion about a real thread works, recalls earlier options correctly, and survives a forced reconnect. |
-| **M2 Act** | Read tools with confinement, `send_to_chat`, `stop_agent`, the gate, announcements, sent log with undo. Tests against a fake Realtime socket. | The flow in section 1 works end to end. Tests prove that gated calls are refused in follow-up and out-of-band responses, that a second gated call for the same utterance is refused, and that reads outside the workspace or of secret files are refused. |
-| **M3 Harden** | Voice history and resume summary, settings polish, content search (if wanted), CI, README, tagged release, install line. | Installs from git on a clean bb, tests are green, and the owner uses it for a week. |
+| **M2 Act** | Read tools with confinement, `send_to_chat`, `stop_agent`, the gate, announcements, sent log with undo. | The flow in section 1 works end to end. Manual checks show that gated calls are refused in follow-up and out-of-band responses, that a second gated call for the same utterance is refused, and that reads outside the workspace or of secret files are refused. |
+| **M3 Harden** | Voice history and resume summary, settings polish, content search (if wanted), README, tagged release, install line. | Installs from git on a clean bb, typecheck and build pass, and the owner uses it for a week. |
 
 ## 7. Risks
 
@@ -369,7 +370,7 @@ Content search across files is left out of v1: it needs a host entry to run
 | OpenAI stops accepting the Codex sign-in for Realtime. | The provider is a plugin contract. Switch to another `realtimeConnection` plugin by setting; an API key provider is a small v2 addition. |
 | `experimental_` SDK APIs change. | Pin the SDK, keep the bb surface in one module, and re-test on each bb update. |
 | The voice model drifts when writing a message. | The panel shows the exact sent text, queued messages can be undone, and "stop it" stops a turn. |
-| Instructions hidden in thread, file or git content. | The gate limits where and how often gated calls happen, reads are confined to the workspace and secrets are denied, and M2 tests cover it. A send on an utterance that did not ask for one remains possible (section 4.4). |
+| Instructions hidden in thread, file or git content. | The gate limits where and how often gated calls happen, reads are confined to the workspace and secrets are denied, and M2 checks it by hand. A send on an utterance that did not ask for one remains possible (section 4.4). |
 | Latency through the Connect tunnel, or from a large context prefix. | Measure both in M0, tune the digest budget, and revisit WebRTC if needed. |
 | Cost against the ChatGPT plan. | Idle limit, hard cap, and no session until you start one. |
 
