@@ -55,6 +55,7 @@ announcements, unsend, drafts and new threads are still untested. See
 Open a thread, open the **Phreak** panel, press **Start**, and talk. Use
 headphones: speaker output can trigger the voice detection. The session ends
 when you press End, hide the panel, switch threads, or stay quiet 15 minutes.
+A soft pulse means a reply is on its way; a quiet double tick, a lookup is running.
 
 ## Develop
 

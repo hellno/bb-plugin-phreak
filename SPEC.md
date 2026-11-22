@@ -95,6 +95,9 @@ unchecked. Usage counts against the plan.
   it; Start shows the error if audio cannot start. Latency is measured from
   `thinking` (your speech ended) to the first audible sample. Speaker output
   can trigger voice detection, so the README recommends headphones.
+- **Working cues**, looped on the playback path, mute or not: a soft 200 Hz
+  swell each second once `thinking` passes 700 ms, and a quiet double tick every
+  3 s while `lookups { running }` is above 0 and no one speaks.
 
 ### 4.3 Session lifecycle
 

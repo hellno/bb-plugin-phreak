@@ -191,11 +191,13 @@ function rowLine(row: TimelineRow): string {
 /** Each lookup forks the thread afresh, hidden, as side chat does, and the fork is stopped and archived once it has answered. */
 export class Lookups {
   private readonly running = new Map<string, AbortController>(); // fork id → its lookup
+  private inFlight = 0; // unlike `running`, counts lookups whose fork is not made yet
   private closed = false;
 
-  constructor(private readonly bb: BbPluginApi, private readonly threadId: string) {}
+  constructor(private readonly bb: BbPluginApi, private readonly threadId: string, private readonly onCount: (running: number) => void) {}
 
   async ask(question: string): Promise<string> {
+    this.onCount(++this.inFlight);
     const lookup = new AbortController();
     let forkId: string | null = null;
     try {
@@ -219,6 +221,7 @@ export class Lookups {
       return `The lookup failed: ${errorMessage(lookup.signal.aborted ? lookup.signal.reason : error)}`;
     } finally {
       if (forkId) this.discard(forkId);
+      this.onCount(--this.inFlight);
     }
   }
 

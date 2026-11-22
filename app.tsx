@@ -9,16 +9,16 @@ import {
   useComposer,
   type ExperimentalThreadTabProps,
 } from "@get-bb/plugin-sdk/app";
-import { SessionAudio } from "./audio";
+import { SessionAudio, type Cue } from "./audio";
 import { PLUGIN_ID, SESSION_PATH } from "./protocol";
 import type { ActionTool, ClientMessage, ServerMessage, SessionState } from "./protocol";
 
 type CaptionMessage = Extract<ServerMessage, { type: "caption" }>;
 type ActionMessage = Extract<ServerMessage, { type: "action" }>;
 
-/** Everything the panel shows: the server messages the audio does not consume, plus local events. */
+/** What the panel follows: every server message but those only the audio or composer takes, plus local events. */
 type PanelEvent =
-  | Exclude<ServerMessage, { type: "audio_start" | "interrupt" | "draft" }>
+  | Exclude<ServerMessage, { type: "audio_start" | "draft" }>
   | { type: "start" }
   | { type: "mute"; muted: boolean }
   | { type: "playing"; playing: boolean }
@@ -69,6 +69,10 @@ class Session {
     this.audio.setMuted(muted);
   }
 
+  cue(kind: Cue | null): void {
+    this.audio.cue(kind);
+  }
+
   end(reason: string): void {
     if (this.closed) return;
     this.closed = true;
@@ -90,7 +94,8 @@ class Session {
         return this.audio.startItem(message.itemId);
       case "interrupt":
         this.thinkingAt = null;
-        return this.send({ type: "played", items: this.audio.flush() });
+        this.send({ type: "played", items: this.audio.flush() });
+        break;
       case "draft":
         try {
           this.draft(message.text);
@@ -135,12 +140,14 @@ interface View {
   reason: string | null; // why the session ended
   latencyMs: number | null;
   playing: boolean;
+  talking: boolean; // from an interrupt (you started speaking) to the next status other than listening
+  lookups: number; // ask_agent lookups in flight
   muted: boolean;
   entries: Entry[]; // the session's whole transcript: sessions are capped at 60 minutes
   error: string | null;
 }
 
-const IDLE: View = { state: null, reason: null, latencyMs: null, playing: false, muted: false, entries: [], error: null };
+const IDLE: View = { state: null, reason: null, latencyMs: null, playing: false, talking: false, lookups: 0, muted: false, entries: [], error: null };
 
 function reduce(view: View, event: PanelEvent): View {
   switch (event.type) {
@@ -152,8 +159,12 @@ function reduce(view: View, event: PanelEvent): View {
       return { ...view, playing: event.playing };
     case "latency":
       return { ...view, latencyMs: event.ms };
+    case "interrupt":
+      return { ...view, talking: true };
     case "status":
-      return { ...view, state: event.state };
+      return { ...view, state: event.state, talking: view.talking && event.state === "listening" };
+    case "lookups":
+      return { ...view, lookups: event.running };
     case "error":
       return { ...view, error: event.message };
     case "caption":
@@ -227,6 +238,13 @@ function PhreakPanel({ threadId }: { threadId: string }) {
 
   // The server says "listening" once it has sent the audio; playback can lag behind.
   const state = view.state === "listening" && view.playing ? "speaking" : view.state;
+  // A soft pulse once a reply is 700 ms late; a sparse tick while lookups run and nobody speaks.
+  const cue = state === "thinking" ? "wait" : state === "listening" && !view.talking && view.lookups > 0 ? "lookup" : null;
+  useEffect(() => {
+    if (cue === null) return;
+    const timer = setTimeout(() => session.current?.cue(cue), cue === "wait" ? 700 : 0);
+    return () => (clearTimeout(timer), session.current?.cue(null));
+  }, [cue]);
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-3 text-sm">
       <div className="flex items-center gap-2">

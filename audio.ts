@@ -10,6 +10,7 @@ const START_LEAD_SECONDS = 0.03; // lets the first chunk of a burst start cleanl
 
 /** Context seconds during which part of an item is scheduled to play. */
 type Span = { start: number; end: number };
+export type Cue = "wait" | "lookup"; // a reply is late; lookups are running
 
 const WORKLET_NAME = "phreak-capture";
 const WORKLET_SOURCE = `
@@ -48,6 +49,12 @@ export class SessionAudio {
   private readonly cut = new Set<string>(); // items whose tail overflowed the schedule and was dropped
   private current: { id: string; spans: Span[] } | null = null; // takes the next binary frames; null drops them
   private playhead = 0;
+  // The double tick sits 1 s into its loop, so a quiet moment shorter than that stays silent.
+  private readonly cues: Record<Cue, AudioBuffer> = {
+    wait: cueLoop(this.ctx, 1, 200, 0.04, [[0, 0.4, 0.6]]),
+    lookup: cueLoop(this.ctx, 3, 660, 0.03, [[1, 0.008, 0.07], [1.15, 0.008, 0.07]]),
+  };
+  private stopCue: (() => void) | null = null;
 
   constructor(private readonly onPlaying: (playing: boolean) => void) {
     this.ctx.resume().catch(() => undefined);
@@ -137,6 +144,23 @@ export class SessionAudio {
     return heard;
   }
 
+  /** Loops a cue until the next call (null: none). On the playback path, so echo cancellation keeps it out of the mic. */
+  cue(kind: Cue | null): void {
+    if (this.closed) return;
+    this.stopCue?.();
+    this.stopCue = null;
+    if (kind === null) return;
+    const fade = new GainNode(this.ctx);
+    const source = new AudioBufferSourceNode(this.ctx, { buffer: this.cues[kind], loop: true });
+    source.connect(fade).connect(this.ctx.destination);
+    source.start();
+    this.stopCue = () => {
+      // A short fade, as cutting a tone mid-swell clicks.
+      fade.gain.setTargetAtTime(0, this.ctx.currentTime, 0.005);
+      source.stop(this.ctx.currentTime + 0.05);
+    };
+  }
+
   /** Stops the mic and playback. Safe to call twice. */
   close(): void {
     if (this.closed) return;
@@ -190,6 +214,20 @@ function toFloat32(data: ArrayBuffer): Float32Array<ArrayBuffer> {
   const out = new Float32Array(pcm.length);
   for (let i = 0; i < pcm.length; i++) out[i] = pcm[i] / 0x8000;
   return out;
+}
+
+/** One loop of a cue, in seconds: sine blips with raised-cosine envelopes, which do not click. */
+function cueLoop(ctx: BaseAudioContext, seconds: number, hz: number, gain: number, blips: [at: number, attack: number, release: number][]): AudioBuffer {
+  const buffer = ctx.createBuffer(1, seconds * SAMPLE_RATE, SAMPLE_RATE);
+  const data = buffer.getChannelData(0);
+  for (const [at, attack, release] of blips) {
+    for (let i = 0, offset = Math.round(at * SAMPLE_RATE); i < (attack + release) * SAMPLE_RATE; i++) {
+      const t = i / SAMPLE_RATE;
+      const envelope = t < attack ? Math.sin((Math.PI / 2) * (t / attack)) : Math.cos((Math.PI / 2) * ((t - attack) / release));
+      data[offset + i] += gain * envelope ** 2 * Math.sin(2 * Math.PI * hz * t);
+    }
+  }
+  return buffer;
 }
 
 function stopTracks(stream: MediaStream): void {

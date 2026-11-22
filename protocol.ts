@@ -34,6 +34,8 @@ export type ServerMessage =
   | ({ type: "action"; tool: ActionTool } & ActionResult)
   /** Text for the panel to add to its thread's composer, after any draft there; the panel answers `drafted`. */
   | { type: "draft"; id: string; text: string }
+  /** How many ask_agent lookups are in flight, sent whenever that changes. */
+  | { type: "lookups"; running: number }
   /** A problem the session survives. */
   | { type: "error"; message: string }
   /** Terminal: the session is over and the socket closes. */
