@@ -5,7 +5,7 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Delivery } from "./protocol";
 
-export type GatedTool = "send_to_chat" | "stop_agent";
+export type ActionTool = "send_to_chat" | "stop_agent";
 export type Outcome = { delivery: Delivery; detail?: string };
 
 const DATA = "[thread data]";
@@ -238,10 +238,10 @@ export class Lookup {
   }
 }
 
-// ---- Gated tools
+// ---- Actions: send and stop
 
-/** Callers have passed the gate in server.ts. bb answering 4xx means it refused; no answer, a timeout or a 5xx means it may have happened. */
-export async function dispatchGated(bb: BbPluginApi, threadId: string, tool: GatedTool, text: string, now: boolean): Promise<Outcome> {
+/** bb answering 4xx means it refused; no answer, a timeout or a 5xx means it may have happened. */
+export async function dispatchAction(bb: BbPluginApi, threadId: string, tool: ActionTool, text: string, now: boolean): Promise<Outcome> {
   try {
     if (tool === "stop_agent") {
       await bb.sdk.threads.stop({ threadId });

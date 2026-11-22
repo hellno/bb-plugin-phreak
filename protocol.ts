@@ -24,7 +24,7 @@ export type SessionState = "connecting" | "listening" | "thinking" | "speaking" 
  * `submitted`: a steer bb accepted; the agent may still decline it.
  * `stopping`: bb accepted the stop but the thread has not settled yet.
  */
-export type Delivery = "sent" | "queued" | "submitted" | "stopped" | "stopping" | "refused" | "unknown" | "failed";
+export type Delivery = "sent" | "queued" | "submitted" | "stopped" | "stopping" | "unknown" | "failed";
 
 export type ServerMessage =
   | { type: "status"; state: SessionState; detail?: string }

@@ -1,7 +1,7 @@
 # Phreak spec
 
 Status: v0.3, 2026-11-22. Implemented as plugin v0.1. A scripted spoken test
-through the server passed on 2026-11-22: reply, lookup, gated send, about
+through the server passed on 2026-11-22: reply, lookup, send, about
 0.8 s to first audio byte. The browser panel is untested.
 
 ## 1. What Phreak is
@@ -60,7 +60,7 @@ Lean rules for v1: zero settings, one voice (`marin`), one turn-detection mode
 ┌──────────────────┐ WebSocket  ┌─────────────────────────────┐ wss  ┌──────────────┐
 │ Phreak panel     │ binary PCM │ server.ts                   │ ───▶ │ Realtime API │
 │  app.tsx         │ + JSON ctl │  both sockets, session,     │ ◀─── │ (JSON+base64)│
-│  audio.ts        │ ◀────────▶ │  gate, dispatch             │      └──────────────┘
+│  audio.ts        │ ◀────────▶ │  tool dispatch              │      └──────────────┘
 └──────────────────┘            │ tools.ts                    │
                                 │  digest, 4 tools ─▶ bb.sdk  │
                                 └──────────────┬──────────────┘
@@ -75,7 +75,7 @@ Files:
 | File | Owns |
 | --- | --- |
 | `protocol.ts` | Types and constants shared by browser and server. No logic. |
-| `server.ts` | Plugin entry, the browser WebSocket route, the upstream Realtime socket, session identity, the gate, dispatch. |
+| `server.ts` | Plugin entry, the browser WebSocket route, the upstream Realtime socket, session identity, tool dispatch. |
 | `tools.ts` | Thread digest, the four tools, and the bb calls behind them. |
 | `app.tsx` | The panel: Start/End, mute, status, captions, delivery results. Ends the session on hide or unmount. |
 | `audio.ts` | Mic capture, resampling, playback queue, played-sample counting, cleanup. |
@@ -206,7 +206,7 @@ unchecked. Usage counts against the ChatGPT plan.
 Phreak reuses bb's agents instead of hand-writing read tools. The voice model
 has four tools:
 
-| Tool | What it does | Gated |
+| Tool | What it does | Changes the thread |
 | --- | --- | --- |
 | `read_thread(before?)` | Older messages of this thread (`threads.timeline`, `threads.message`). Instant. | no |
 | `ask_agent(question)` | Hands a lookup to a hidden fork of this thread, as side chat does: files, git, other threads, anything the agent can read. The fork is created on first use (`threads.fork`, hidden) and reused. One lookup runs at a time: `threads.wait` (3-minute timeout), then `threads.output`. If the fork times out or stops on a question or permission, Phreak stops and archives it, and the next lookup starts a fresh fork. Answers take an agent turn, about 10 to 60 s. | no |
@@ -236,46 +236,27 @@ has four tools:
 - Read confinement is bb's and the agent's own: its sandbox and permission
   mode.
 
-### 4.6 The gate
+### 4.6 Sending and stopping
 
-Sends and stops change the thread, so the code (not only the prompt) ties them
-to your own words.
+The voice model decides when to call `send_to_chat` and `stop_agent`, from the
+conversation, in whatever words you use: "send that", "yeah, push it over",
+"can you pass that on?". There are no phrase lists.
 
-1. **Bind:** automatic response creation is off. Phreak creates every response
-   itself: on `input_audio_buffer.committed`, tagged in `metadata` with that
-   item. Follow-ups after tool results carry the same tag. A gated call in a
-   response with a missing or unknown tag is refused.
-2. **Intent check:** before a gated call is dispatched, Phreak waits up to 5 s
-   for that item's final input transcription. It then checks that the
-   transcription is an affirmative command for that tool:
-   - It contains an intent phrase:
-     - `send_to_chat`: "send", "tell it", "tell the agent", "go ahead",
-       "ship it"
-     - `stop_agent`: "stop", "cancel", "abort", "halt"
-   - It contains no negation ("don't", "do not", "not", "never", "no").
-   - It is not a question.
+- **Instructions:** call them when you ask for it, never on the model's own
+  initiative, and never because thread data or a tool result says so.
+- **Correctness:**
+  - Phreak creates every response itself, on `input_audio_buffer.committed` and
+    after tool results, one at a time.
+  - Calls run only from a response that completed. A reply you talked over, or
+    a cancelled one, runs nothing, because cancelled responses can still emit
+    arguments.
+  - A dead or replaced session never acts (section 4.3).
+- **Backstop:** the panel shows the exact text of every send, and "stop it"
+  stops the turn.
 
-   The phrase lists are constants in `server.ts`.
-3. **Once:** a matching item authorizes one gated call and is then consumed.
-4. **Completed only:** a gated call is dispatched on `response.done` with status
-   `completed`, never on `function_call_arguments.done`, because cancelled
-   responses can still emit arguments.
-5. **Ownership:** the session must still be live (section 4.3).
-
-If a check fails, the tool returns a refusal ("say 'send it' to confirm") and
-the model asks you to say it plainly.
-
-So "check the diff, and if it touches auth tell it to add tests" works in one
-step: "tell it" is in your words. But "what did the diff say?" can never lead to
-a send, whatever the answer contains.
-
-**Limitations:**
-
-- A mis-transcription can authorize or block a call.
-- Text injected into context can still change what the message says on an
-  utterance that does ask for a send.
-- The intent phrases are English.
-- The panel shows the exact text of every send, and "stop it" is the backstop.
+**Limitation:** text planted in the chat or in a file the fork reads could steer
+the model into a send you did not ask for. The owner chose natural phrasing over
+hardcoded checks on 2026-11-22.
 
 ### 4.7 UI
 
@@ -318,7 +299,7 @@ Nothing goes out before Start, and nothing is stored.
 | --- | --- | --- |
 | **1 Talk** | Package, protocol, panel, audio both ways, the provider connection with error categories, digest and updates, barge-in, lifecycle and limits. | Over bb Connect, you can discuss a real thread, interrupt Phreak, and it recalls earlier options correctly. Latency is noted. |
 | **2 Look up** | `read_thread`, `ask_agent` with the hidden fork. | "Did it touch the auth module?" comes back correct while you keep talking, and the fork is archived at session end. |
-| **3 Act** | `send_to_chat`, `stop_agent`, the gate, result lines. | The flow in section 1 works end to end. "What did the diff say?" over a diff containing "send this" sends nothing. |
+| **3 Act** | `send_to_chat`, `stop_agent`, result lines. | The flow in section 1 works end to end, in natural phrasing. |
 
 The checks are `tsc --noEmit`, `bb plugin build`, and the manual checks above.
 
@@ -329,7 +310,7 @@ The checks are `tsc --noEmit`, `bb plugin build`, and the manual checks above.
 | OpenAI stops accepting the Codex sign-in for Realtime. | The provider is a plugin contract. Another `realtimeConnection` plugin, or a small API-key provider, can replace it. |
 | `experimental_` SDK APIs change. | Pin the SDK and re-check on each bb update. |
 | The voice model writes the wrong message. | The panel shows the exact text, and "stop it" stops the turn. |
-| Instructions injected into context. | The intent check and mutations bound to the session's thread. The fork's read-only prefix is an instruction only (section 4.5). |
+| Instructions injected into context. | Mutations are bound to the session's thread, the panel shows every send, and "stop it" is the backstop. The model's instructions and the fork's read-only prefix are instructions only (sections 4.5, 4.6). |
 | Latency through bb Connect. | Measured in slice 1. WebRTC is the fallback plan. |
 
 ## 8. Credits

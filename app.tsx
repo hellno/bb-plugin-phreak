@@ -170,7 +170,6 @@ const DELIVERY_LABEL: Record<Delivery, string> = {
   submitted: "Submitted; the agent may still decline",
   stopped: "Stopped",
   stopping: "Stopping; not settled yet",
-  refused: "Refused",
   unknown: "Delivery unknown",
   failed: "Failed",
 };

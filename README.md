@@ -12,10 +12,10 @@ into the thread.
 - **Looks things up through bb's own agents.** Questions about files, git or
   other threads go to a hidden fork of the thread, the way side chat works, and
   the answer is spoken when it arrives.
-- **Acts only on your words.** "Send that" composes a clear message from what
-  you decided and sends it. "Tell it now" steers a running turn. "Stop it" stops
-  the agent. A send or stop runs only when your own transcribed words ask for
-  it.
+- **Acts when you ask, in your own words.** "Send that", "yeah, push it over"
+  or "pass that on" composes a clear message from what you decided and sends
+  it. "Tell it now" steers a running turn. "Stop it" stops the agent. The panel
+  shows the exact text of every send.
 - **Runs on your ChatGPT plan.** The voice comes from OpenAI Realtime through
   the Codex sign-in, via the
   [`codex-realtime`](https://github.com/gpambrozio/bb-plugins/tree/main/codex-realtime)
@@ -24,7 +24,7 @@ into the thread.
   [the risk note](SPEC.md#41-provider-codex-through-realtimeconnection).
 
 **Status:** v0.1. A scripted spoken test through the server passed: a spoken
-reply, a lookup, and a gated send, with about 0.8 s to first audio. The browser
+reply, a lookup, and a send, with about 0.8 s to first audio. The browser
 panel is still untested. See [SPEC.md](SPEC.md).
 
 ## Setup
