@@ -1,12 +1,14 @@
 // Mic capture and assistant playback for one Phreak session. The 24 kHz
 // context and gapless playback are adapted from Voice Mode's audio.ts
 // (steveafrost/bb-plugin-voice-mode, MIT).
-import { SAMPLE_RATE, type Played } from "./protocol";
+import { NoiseGate } from "./gate";
+import { SAMPLE_RATE, type MicReport, type Played } from "./protocol";
 
 const FRAME_SAMPLES = (SAMPLE_RATE * 40) / 1000; // one 40 ms mic frame
 const FALLBACK_FRAME_SAMPLES = 1024; // ScriptProcessor sizes are powers of two: ~43 ms
 const MAX_AHEAD_SECONDS = 60; // the relay sends faster than real time; replies are meant to be short
 const START_LEAD_SECONDS = 0.03; // lets the first chunk of a burst start cleanly
+const STRICT_TAIL_MS = 600; // the gate stays strict this long after Phreak stops, while the echo canceller settles
 
 /** Context seconds during which part of an item is scheduled to play. */
 type Span = { start: number; end: number };
@@ -55,6 +57,12 @@ export class SessionAudio {
     lookup: cueLoop(this.ctx, 3, 660, 0.03, [[1, 0.008, 0.07], [1.15, 0.008, 0.07]]),
   };
   private stopCue: (() => void) | null = null;
+  /** Only speech reaches OpenAI's voice detection; noise goes out as silence. */
+  private readonly gate = new NoiseGate();
+  private track: MediaStreamTrack | null = null;
+  private playEndedAt = -Infinity;
+  /** For the level meter: the mic's loudness from 0 to 1 (rises at once, falls gently), and whether Phreak hears it. */
+  readonly meter = { level: 0, passing: false };
 
   constructor(private readonly onPlaying: (playing: boolean) => void) {
     this.ctx.resume().catch(() => undefined);
@@ -81,8 +89,15 @@ export class SessionAudio {
     // The session may have ended while the permission prompt was open.
     if (this.closed) return stopTracks(stream);
     this.stream = stream;
+    this.track = stream.getAudioTracks()[0] ?? null;
     this.setMuted(this.muted); // a mute pressed while the permission prompt was open
-    const capture = await this.captureNode((samples) => onFrame(toPcm16(samples)));
+    const capture = await this.captureNode((samples) => {
+      // Muted frames skip the gate, so their silence does not drag its quiet floor down.
+      const frames = this.muted ? [new Float32Array(samples.length)] : this.gate.push(samples, this.strict());
+      this.meter.level = this.muted ? 0 : Math.max(meterLevel(this.gate.levelDb), this.meter.level * 0.8);
+      this.meter.passing = !this.muted && this.gate.open;
+      for (const frame of frames) onFrame(toPcm16(frame));
+    });
     if (this.closed) return;
     const sink = new GainNode(this.ctx, { gain: 0 }); // capture nodes only run while something downstream pulls them
     this.ctx.createMediaStreamSource(stream).connect(capture).connect(sink).connect(this.ctx.destination);
@@ -117,7 +132,9 @@ export class SessionAudio {
     source.start(start);
     source.onended = () => {
       this.sources.delete(source);
-      if (this.sources.size === 0) this.onPlaying(false);
+      if (this.sources.size > 0) return;
+      this.playEndedAt = performance.now();
+      this.onPlaying(false);
     };
     if (this.sources.size === 0) this.onPlaying(true);
     this.sources.add(source);
@@ -142,7 +159,10 @@ export class SessionAudio {
       source.onended = null;
       source.stop();
     }
-    if (this.sources.size > 0) this.onPlaying(false);
+    if (this.sources.size > 0) {
+      this.playEndedAt = performance.now();
+      this.onPlaying(false);
+    }
     this.sources.clear();
     this.items.clear();
     this.cut.clear();
@@ -166,6 +186,23 @@ export class SessionAudio {
       fade.gain.setTargetAtTime(0, this.ctx.currentTime, 0.005);
       source.stop(this.ctx.currentTime + 0.05);
     };
+  }
+
+  /** The mic's device and settings, and what the gate has done so far. */
+  micReport(): MicReport {
+    const settings = this.track?.getSettings() ?? {};
+    return {
+      device: this.track?.label ?? "",
+      echoCancellation: typeof settings.echoCancellation === "boolean" ? settings.echoCancellation : null,
+      noiseSuppression: typeof settings.noiseSuppression === "boolean" ? settings.noiseSuppression : null,
+      autoGainControl: typeof settings.autoGainControl === "boolean" ? settings.autoGainControl : null,
+      ...this.gate.stats,
+    };
+  }
+
+  /** While Phreak is audible, and just after, it takes more to count as speech: talking over it cuts it off. */
+  private strict(): boolean {
+    return this.sources.size > 0 || performance.now() - this.playEndedAt < STRICT_TAIL_MS;
   }
 
   /** Stops the mic and playback. Safe to call twice. */
@@ -205,6 +242,11 @@ export class SessionAudio {
       return node;
     }
   }
+}
+
+/** dBFS to the meter's 0 to 1: -55 (a quiet room) to -15 (close speech). */
+function meterLevel(db: number): number {
+  return Math.min(1, Math.max(0, (db + 55) / 40));
 }
 
 function toPcm16(samples: Float32Array): ArrayBuffer {

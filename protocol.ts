@@ -43,8 +43,29 @@ export type ServerMessage =
 
 export type Played = { itemId: string; ms: number }[];
 
+/** The mic and its noise gate, sent every few seconds and logged by the server at the session's end. Levels in dBFS. */
+export type MicReport = {
+  device: string;
+  echoCancellation: boolean | null;
+  noiseSuppression: boolean | null;
+  autoGainControl: boolean | null;
+  frames: number;
+  openFrames: number;
+  opens: number;
+  strictOpens: number;
+  rejected: number;
+  relearned: number;
+  floorDb: number;
+  firstFloorDb: number | null;
+  maxFloorDb: number;
+  speechPeakDb: number;
+  noisePeakDb: number;
+};
+
 export type ClientMessage =
   /** Answer to `interrupt`: how much of every flushed item was heard (0 if none). */
   | { type: "played"; items: Played }
   /** Answer to `draft` once the composer took it, or the composer's error. */
-  | { type: "drafted"; id: string; ok: boolean; error?: string };
+  | { type: "drafted"; id: string; ok: boolean; error?: string }
+  /** How the mic and its noise gate are doing. */
+  | { type: "mic"; report: MicReport };

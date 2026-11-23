@@ -91,12 +91,37 @@ unchecked. Usage counts against the plan.
   short pauses rarely end your turn (it waits up to 8 s, against 4 s by
   default). `noise_reduction: { type: "near_field" }`, tuned for headset mics,
   filters the input before voice detection, so background noise starts fewer
-  turns; a laptop mic may do worse with it. Each session logs its counts at the
-  end, with no words: speech starts; turns, with those without words and
-  failed transcriptions; starts before a reply was heard (turns that ended too
+  turns; a laptop mic may do worse with it.
+- **Noise gate** (`gate.ts`, in the browser, before anything is sent): only
+  sustained sound well above the room's quiet floor goes out; everything else
+  is sent as silence, one frame out for every frame in, so turn ends and mute
+  keep working. A frame counts as voice when most of it, not one click, is
+  12 dB over the floor (18 dB while Phreak is audible and for 600 ms after).
+  The gate opens on 3 such frames among those held (5 while Phreak is
+  audible). It holds up to 480 ms back while deciding and releases it on open,
+  so the first syllable survives without a standing delay. It stays open
+  480 ms past the last voice, for gaps between words. The open threshold is
+  kept between -50 and -32 dBFS, so near-silence never opens it and close
+  speech always does. The floor learns from closed frames: quick to fall, slow
+  to rise. A sound that holds the gate open for 3 s without a dip becomes the
+  new floor; speech always dips between words. Muted frames skip the gate. In
+  node simulations, steady and rising noise, typing and knocks never open it,
+  and speech opens it with its onset intact, Phreak speaking or not. It has
+  not yet been tested by voice.
+- **Meter:** the bars follow the mic. They are faint while the gate keeps the
+  sound out and full while Phreak hears speech, so a dead mic (flat) differs
+  from filtered noise (faint).
+- **Logs:** each session logs two lines at its end, with no words. The turn
+  counts: speech starts; turns, with those without words and failed
+  transcriptions; starts before a reply was heard (turns that ended too
   early); and replies you talked over (from the browser's playback reports).
-  If many turns stay wordless, the next lever is `server_vad` with a higher
-  `threshold` and longer `silence_duration_ms`.
+  The mic report, sent by the panel every 10 s and at End: the device name,
+  the browser's echo, noise and gain settings, gate opens (and those while
+  Phreak spoke), share of time open, sounds kept out, relearned floors, the
+  floor at start, now and at its highest, and the loudest sound kept out and
+  passed. A floor that climbs while you only listen points to the browser's
+  auto gain, the next thing to turn off; `server_vad` would trade away the
+  pause handling.
 - **Down:** a JSON `audio_start { itemId }` precedes each assistant item's PCM.
   The browser schedules it gaplessly and counts the samples played per item.
 - **Barge-in:** on `speech_started` the server sends `interrupt`, stops

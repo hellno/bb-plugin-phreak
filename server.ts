@@ -185,6 +185,8 @@ class Session {
   private readonly silence = setTimeout(() => this.end("Ended after 15 minutes of silence."), SILENCE_MS);
   /** Turn-taking counts, logged at the end without any words, to tell false starts from early stops. */
   private readonly turns = { starts: 0, commits: 0, wordless: 0, failed: 0, resumed: 0, cutOff: 0 };
+  /** The panel's latest report on the mic and its noise gate, as a log line. */
+  private mic = "no mic report";
 
   constructor(
     private readonly bb: BbPluginApi,
@@ -278,6 +280,7 @@ class Session {
       `session ${this.id}: ${starts} speech starts, ${commits} turns (${wordless} without words, ${failed} failed transcriptions), ` +
         `${resumed} resumed before a reply, ${cutOff} replies talked over`,
     );
+    this.bb.log.info(`session ${this.id}: ${this.mic}`);
     this.toBrowser({ type: "ended", reason: detail ? `${reason} ${detail}` : reason });
     this.browser.close(1000);
   }
@@ -295,6 +298,7 @@ class Session {
   onBrowserText(data: string): void {
     const message = parseJson(data) as ClientMessage | null;
     if (message?.type === "drafted") return this.answers.get(String(message.id))?.(message);
+    if (message?.type === "mic") return void (this.mic = micLine(message.report));
     if (message?.type !== "played" || !Array.isArray(message.items)) return;
     for (const entry of message.items) {
       const audio = this.audio.get(String(entry?.itemId));
@@ -578,6 +582,23 @@ function parseJson(text: string): unknown {
   } catch {
     return null;
   }
+}
+
+/** The panel's mic report as one log line: numbers, flags and the device's name, nothing anyone said. */
+function micLine(report: unknown): string {
+  const r = (report ?? {}) as Record<string, unknown>;
+  const n = (key: string) => (typeof r[key] === "number" && Number.isFinite(r[key]) ? Math.round(r[key] * 10) / 10 : "?");
+  const flag = (key: string) => (r[key] === true ? "on" : r[key] === false ? "off" : "?");
+  const device = typeof r.device === "string" ? r.device.replace(/[^\p{L}\p{N} ()._:-]/gu, "").slice(0, 80) : "";
+  const frames = Number(r.frames) || 0;
+  const openShare = frames ? `${Math.round(((Number(r.openFrames) || 0) / frames) * 100)}%` : "?";
+  return (
+    `mic "${device || "unnamed"}" echo ${flag("echoCancellation")}, noise ${flag("noiseSuppression")}, gain ${flag("autoGainControl")}; ` +
+    `gate opened ${n("opens")} times (${n("strictOpens")} while Phreak spoke), open ${openShare} of ${frames} frames, ` +
+    `${n("rejected")} sounds kept out, ${n("relearned")} steady sounds relearned; ` +
+    `floor ${n("firstFloorDb")} dB at start, ${n("floorDb")} now, ${n("maxFloorDb")} highest; ` +
+    `loudest kept out ${n("noisePeakDb")} dB, loudest passed ${n("speechPeakDb")} dB`
+  );
 }
 
 function isOverflow(error: RealtimeError | undefined): boolean {

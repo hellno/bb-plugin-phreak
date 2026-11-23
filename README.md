@@ -65,9 +65,12 @@ minutes.
   macOS too) starts or ends the session, opening the panel if it is hidden.
   Rebind it in Settings → Keyboard.
 - **State:** a chip beside the buttons says Connecting, Listening, Muted,
-  Thinking, Looking up, Speaking, Reconnecting or Ended, and small bars move
-  while the mic hears you. A soft pulse means a reply is on its way; a quiet
-  double tick, a lookup is running.
+  Thinking, Looking up, Speaking, Reconnecting or Ended. A soft pulse means a
+  reply is on its way; a quiet double tick, a lookup is running.
+- **Mic bars:** they follow your mic. Faint bars are sound Phreak ignores as
+  noise; full bars are speech it hears. Phreak filters out steady noise,
+  typing and knocks, and takes more to count as speech while it is talking,
+  so room noise doesn't cut it off.
 - **Captions:** Phreak's words appear as it speaks. Yours appear as a "You …"
   line the moment you start talking and fill in once you pause.
 - **Latency:** turn on **Show reply latency** in Phreak's settings, or run
