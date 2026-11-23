@@ -27,10 +27,11 @@ when you say "send that".
 
 **Status:** v0.1. On 2026-11-22 a scripted spoken test of an earlier build
 passed through the server (a reply, a lookup and a send, about 0.8 s to the
-first audio byte), and its author uses the panel. Not yet tested by voice:
-the routing and voice detection as changed on 2026-11-23, stop, "tell it now",
-reconnects, announcements, unsend, drafts, new threads and question cards. See
-[SPEC.md](SPEC.md).
+first audio byte). On 2026-11-23 its author's first voice session showed room
+noise taken for speech and cutting replies off; the noise gate added since is
+simulated only. Not yet tested by voice: the noise gate, the routing, stop,
+"tell it now", reconnects, announcements, unsend, drafts, new threads and
+question cards. See [SPEC.md](SPEC.md).
 
 ## Requirements
 

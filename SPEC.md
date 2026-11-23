@@ -2,8 +2,10 @@
 
 Status: plugin v0.1, 2026-11-23. On 2026-11-22 a scripted spoken test of an
 earlier build passed through the server (reply, lookup, gated send; ~0.8 s to
-the first audio byte), and the owner uses the panel. Not yet tested by voice:
-the routing and voice detection as changed on 2026-11-23, stop, "tell it now",
+the first audio byte). On 2026-11-23 the owner's first voice session, while
+only listening, logged 7 speech starts and 4 replies talked over: room noise
+taken for speech. The noise gate added since (§4.2) is simulated only. Not yet
+tested by voice: the noise gate, the routing, stop, "tell it now",
 reconnects, announcements, unsend, drafts, new threads and answering question
 cards.
 
