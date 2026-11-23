@@ -13,7 +13,8 @@ const MAX_HELD = 12; // ~480 ms of onset kept back while deciding, released on o
 const QUIET_FRAMES = 3; // ~120 ms below the candidate level ends a held sound; shorter dips are gaps between syllables
 const HYSTERESIS_DB = 6; // stays open down to this much below the open threshold
 const HANG_FRAMES = 12; // ~480 ms open after the level drops, for gaps between words
-const STEADY_FRAMES = 75; // ~3 s open without a dip: steady noise such as a fan, not speech, which dips between words
+const STEADY_FRAMES = 75; // ~3 s open at a near-constant level: steady noise such as a fan
+const STEADY_RANGE_DB = 6; // a fan stays within this; speech swings more with every syllable
 const MIN_OPEN_DB = -50; // never opens on near-silence
 const STRICT_MIN_OPEN_DB = -38; // talking over Phreak takes a voice at least this loud, so a voice across the room does not cut it off
 const MAX_OPEN_DB = -32; // sustained close-mic speech always opens, however noisy the room
@@ -79,7 +80,7 @@ export class NoiseGate {
   private floor = -60;
   private held: Held[] = [];
   private quietRun = 0;
-  private steadyRun = 0;
+  private steady: number[] = []; // the voice level of recent open frames, for the steady-noise test
   private wasStrict = false;
   private hang = 0;
 
@@ -105,25 +106,27 @@ export class NoiseGate {
     if (this.open) {
       stats.openFrames++;
       stats.speechPeakDb = Math.max(stats.speechPeakDb, round(db));
+      this.steady.push(voice);
+      if (this.steady.length > STEADY_FRAMES) this.steady.shift();
       if (voice >= openAt - HYSTERESIS_DB) {
         this.hang = HANG_FRAMES;
-        if (++this.steadyRun >= STEADY_FRAMES) {
-          // Open 3 s without a dip: steady noise, not speech. It becomes the floor.
+        if (this.steady.length === STEADY_FRAMES && Math.max(...this.steady) - Math.min(...this.steady) < STEADY_RANGE_DB) {
+          // Open 3 s at a near-constant level: steady noise, not speech. It becomes the floor.
           this.floor = clamp(voice, FLOOR_MIN_DB, FLOOR_MAX_DB);
           this.close();
           stats.relearned++;
           stats.floorDb = round(this.floor);
           stats.maxFloorDb = Math.max(stats.maxFloorDb, stats.floorDb);
         }
-      } else {
-        this.steadyRun = 0;
-        if (--this.hang <= 0) this.close();
+      } else if (--this.hang <= 0) {
+        this.close();
       }
       return [frame];
     }
 
     if (db < openAt) this.learn(db);
-    const quiet = voice < Math.max(this.floor + CANDIDATE_DB, MIN_OPEN_DB - CANDIDATE_DB);
+    // Below the candidate level a frame is quiet; that level never exceeds the open level, so no frame is both.
+    const quiet = voice < Math.min(Math.max(this.floor + CANDIDATE_DB, MIN_OPEN_DB - CANDIDATE_DB), openAt);
     if (quiet && this.held.length === 0) return [this.silenced({ frame, db, loud: false })];
     // Held in order, so frames come out as they went in.
     this.held.push({ frame: frame.slice(), db, loud: voice >= openAt });
@@ -132,7 +135,7 @@ export class NoiseGate {
     if (this.held.filter((held) => held.loud).length >= (strict ? STRICT_ATTACK_FRAMES : ATTACK_FRAMES)) {
       this.open = true;
       this.hang = HANG_FRAMES;
-      this.steadyRun = 0;
+      this.steady = [];
       stats.opens++;
       if (strict) stats.strictOpens++;
       stats.openFrames += this.held.length;
@@ -143,15 +146,16 @@ export class NoiseGate {
     return this.held.length > MAX_HELD ? [this.silenced(this.held.shift()!)] : [];
   }
 
-  /** Frames still held, as silence: on mute, and at the end, so every frame in has one out. */
+  /** Closes the gate and returns the frames still held, as silence: on mute, and at the end, so every frame in has one out. */
   flush(): Float32Array[] {
+    this.close();
     return this.release(false);
   }
 
   private close(): void {
     this.open = false;
     this.hang = 0;
-    this.steadyRun = 0;
+    this.steady = [];
   }
 
   /** Slow to rise, quick to fall, so a quiet room is learned fast and speech barely moves it. */

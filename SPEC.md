@@ -108,12 +108,13 @@ unchecked. Usage counts against the plan.
   - The open threshold stays between -50 and -32 dBFS (-38 and -32 while
     Phreak is audible). The floor learns from closed frames, quick to fall and
     slow to rise, between -62 and -35 dBFS; digital silence (below -90) and
-    muted frames are ignored. A sound that holds the gate open for 3 s without
-    a dip becomes the new floor; speech always dips between words.
+    muted frames are ignored, and muting closes the gate. A sound that holds
+    the gate open for 3 s within a 6 dB range becomes the new floor; speech
+    swings more than that with every syllable.
   - In node simulations on synthetic frames, steady and rising noise, typing,
     knocks, TV-like noise and a voice at -40 dBFS while Phreak talks never
     open it, and speech opens it with its onset intact, Phreak speaking or
-    not. Known limits: a fan that starts suddenly passes for about 3.5 s
+    not, including 8 s of fluent speech without pauses. Known limits: a fan that starts suddenly passes for about 3.5 s
     before it is learned; a 300 ms creak opens it; a second voice louder than
     -38 dBFS passes even while Phreak talks; a word shorter than 200 ms may not
     cut Phreak off. It has not yet been tested by voice.
