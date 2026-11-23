@@ -1,7 +1,7 @@
 // Phreak's panel for the thread it sits beside: Start/End and Mute on one row
 // with a state chip, live captions, and a card per action. Drafts go into the
-// thread's composer. Ctrl+Shift+Space opens the panel, then starts or ends.
-import { useCallback, useEffect, useReducer, useRef, type MouseEvent, type UIEvent } from "react";
+// thread's composer. Ctrl+Shift+Space starts or ends, opening the panel if needed.
+import { useCallback, useEffect, useReducer, useRef, type MouseEvent, type RefObject, type UIEvent } from "react";
 import {
   Markdown,
   definePluginApp,
@@ -73,7 +73,10 @@ class Session {
       .catch((error: unknown) => this.end(`Microphone unavailable: ${error instanceof Error ? `${error.name}: ` : ""}${errorText(error)}`));
     // A browser may keep audio off when no click or key press started it (Safari after the palette, say).
     setTimeout(() => {
-      if (!this.closed && !this.audio.running) this.end("The browser kept audio off. Press Start.");
+      if (this.closed) return;
+      void this.audio.ensureRunning().then((running) => {
+        if (!running) this.end("The browser kept audio off. Press Start.");
+      });
     }, AUDIO_CHECK_MS);
   }
 
@@ -316,10 +319,18 @@ function PhreakPanel({ threadId }: { threadId: string }) {
     dispatch({ type: "start" });
   };
   const toggle = live ? () => end("You ended the session.") : start;
+  // Start moves between the empty panel and the top row, so focus follows the button you pressed.
+  const toggleButton = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
   const onToggleClick = (event: MouseEvent) => {
     if (event.detail === 0 && performance.now() - shortcutAt < 500) return; // the shortcut's own key release
+    refocus.current = true;
     toggle();
   };
+  useEffect(() => {
+    if (refocus.current) toggleButton.current?.focus();
+    refocus.current = false;
+  }, [live]);
 
   const toggleMute = () => {
     session.current?.mute(!view.muted);
@@ -384,7 +395,9 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   const level = useCallback(() => session.current?.level ?? 0, []);
   // Your newest line, the only empty one worth showing: it is still being heard or transcribed.
   const hearingKey = live ? view.entries.filter((entry) => entry.type === "caption" && entry.role === "user").at(-1)?.key : undefined;
-  const empty = view.entries.length === 0;
+  // Empty captions show only as your newest line in a live session: still being heard or transcribed.
+  const lines = view.entries.filter((entry) => entry.type === "action" || entry.text !== "" || entry.key === hearingKey);
+  const empty = lines.length === 0;
   return (
     <div className="flex h-full min-h-0 flex-col text-sm">
       {/* Screen readers hear state changes and quiet endings; captions stay silent. */}
@@ -393,7 +406,13 @@ function PhreakPanel({ threadId }: { threadId: string }) {
       </span>
       {live || !empty ? (
         <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-          <button type="button" aria-label={live ? "End voice session" : "Start voice session"} className={`${BUTTON} ${live ? OUTLINE : PRIMARY}`} onClick={onToggleClick}>
+          <button
+            ref={toggleButton}
+            type="button"
+            aria-label={live ? "End voice session" : "Start voice session"}
+            className={`${BUTTON} ${live ? OUTLINE : PRIMARY}`}
+            onClick={onToggleClick}
+          >
             <Icon name={live ? "Square" : "Mic"} aria-hidden className={live ? "size-3.5 text-destructive" : "size-4"} />
             {live ? "End" : "Start"}
           </button>
@@ -417,14 +436,14 @@ function PhreakPanel({ threadId }: { threadId: string }) {
       {view.error === null ? null : <Notice message={view.error} />}
       {view.state === "ended" && view.reason !== null ? <Notice message={view.reason} /> : null}
       <div ref={scroller} onScroll={onScroll} className="relative min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {empty && !live ? <StartHere onStart={onToggleClick} /> : null}
+        {empty && !live ? <StartHere buttonRef={toggleButton} onStart={onToggleClick} /> : null}
         {empty && live && shown !== null ? <Waiting level={level} label={CHIP[shown].label} /> : null}
         <ol ref={list} aria-label="Conversation" className="flex flex-col gap-5">
-          {view.entries.map((entry) =>
+          {lines.map((entry) =>
             entry.type === "action" ? (
               <ActionCard key={entry.key} action={entry} />
             ) : (
-              <Caption key={entry.key} caption={entry} hearing={entry.key === hearingKey} />
+              <Caption key={entry.key} caption={entry} />
             ),
           )}
         </ol>
@@ -434,11 +453,11 @@ function PhreakPanel({ threadId }: { threadId: string }) {
 }
 
 /** Before the first session, or after one that said nothing: the one thing to do. */
-function StartHere({ onStart }: { onStart: (event: MouseEvent) => void }) {
+function StartHere({ buttonRef, onStart }: { buttonRef: RefObject<HTMLButtonElement | null>; onStart: (event: MouseEvent) => void }) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-muted-foreground">
       <Icon name="Mic" aria-hidden className="size-6" />
-      <button type="button" aria-label="Start voice session" className={`${BUTTON} ${PRIMARY}`} onClick={onStart}>
+      <button ref={buttonRef} type="button" aria-label="Start voice session" className={`${BUTTON} ${PRIMARY}`} onClick={onStart}>
         Start
       </button>
       <p className="text-xs">Best with headphones</p>
@@ -498,8 +517,7 @@ function LevelMeter({ level, large = false }: { level: () => number; large?: boo
 }
 
 /** One spoken turn, written in place: grey while it is still being heard, normal once final. */
-function Caption({ caption, hearing }: { caption: CaptionMessage; hearing: boolean }) {
-  if (caption.text === "" && !hearing) return null;
+function Caption({ caption }: { caption: CaptionMessage }) {
   return (
     <li>
       <div className="mb-1 text-xs font-medium text-muted-foreground">{caption.role === "user" ? "You" : "Phreak"}</div>

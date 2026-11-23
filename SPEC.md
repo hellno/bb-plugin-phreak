@@ -203,8 +203,9 @@ A "Phreak" thread tab (`app.slots.experimental_tab`).
   codex-realtime's allowed plugins), with the message under Details.
 - **Shortcut:** Ctrl+Shift+Space (`app.commands`, rebindable) starts or ends
   the session. While the panel is hidden, it opens the panel, which starts
-  once it shows (within 3 s). If the browser keeps audio off because no key
-  press or click started it, the session ends after 2 s and asks for Start.
+  once it shows (within 3 s). If the browser still holds audio suspended after
+  2 s (no key press or click started it), Phreak resumes it once more and, if
+  that fails, ends the session and asks for Start.
 - **Icons:** bb's icon set, plus two declared in the manifest
   (`phreak/mic-off`, `phreak/audio-lines`).
 
