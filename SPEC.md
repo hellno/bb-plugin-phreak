@@ -39,7 +39,7 @@ bb's side chat is the closest in spirit but text only.
 | Sending | Immediately when you ask. No confirmation step. |
 | Authorization | The voice model decides from your words, in any phrasing. No phrase lists or other hardcoded gates. |
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |
-| Repo | Public and lean. Zero settings, one voice (`marin`), `semantic_vad`, no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
+| Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad`, no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
 
 Proposed but not yet confirmed: the name, the MIT licence and the panel UI.
 
@@ -180,11 +180,32 @@ from one.
 
 ### 4.7 Panel
 
-A "Phreak" thread tab (`app.slots.experimental_tab`): Start/End, mute, a status
-line with latency, live captions, and one line per action with bb's status and
-the exact text. A new thread's line links it in a new browser tab (its `href`
-from `experimental_useSidebarThreads()`): opening it in bb would unmount the
-panel and end the session.
+A "Phreak" thread tab (`app.slots.experimental_tab`).
+
+- **Top row:** Start, or a red End with a square; Mute, which turns red and
+  reads Unmute with a crossed-out mic while muted; a four-bar mic level meter;
+  and a state chip, an icon and a word: Connecting, Listening, Muted, Looking
+  up, Thinking, Speaking, Reconnecting or Ended. The latency follows the chip
+  only when the `showLatency` setting is on (off by default).
+- **Screen readers** hear the chip's word and routine endings through a
+  status region. Captions stay silent.
+- **Captions** update in place: grey until final. An empty caption holds its
+  place, so later lines do not move. The list follows the newest line unless
+  you scroll up.
+- **Action cards** show bb's status, the detail, and the text through bb's
+  `Markdown`, as the chat shows it.
+- **Problems** lead with the fix (for example, add `phreak` to
+  codex-realtime's allowed plugins), with the message under Details.
+- **Shortcut:** Ctrl+Shift+Space (`app.commands`, rebindable) starts or ends
+  the session while the panel shows. While the panel is hidden, it opens the
+  panel and focuses Start: a session needs its panel on screen, and audio must
+  start inside a key press.
+- **Icons:** bb's icon set, plus two declared in the manifest
+  (`phreak/mic-off`, `phreak/audio-lines`).
+
+A new thread's card links it in a new browser tab (its `href` from
+`experimental_useSidebarThreads()`): opening it in bb would unmount the panel
+and end the session.
 A draft goes into this thread's composer (`useComposer().insert(text, { at:
 "end", block: true })`), after any draft there and even off screen. The panel
 opens the same-origin route `/api/v1/plugins/phreak/http/session?threadId=…`
@@ -197,7 +218,7 @@ fork's answers. Nothing goes out before Start, and nothing is stored.
 
 ## 5. Not in v1
 
-Persistence and resume, overlays or shortcuts, push-to-talk, settings, Phreak
+Persistence and resume, overlays, push-to-talk, settings beyond latency, Phreak
 writing files or running commands itself, an API-key provider, WebRTC, unit
 tests.
 

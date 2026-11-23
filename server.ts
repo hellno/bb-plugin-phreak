@@ -566,6 +566,10 @@ function isOverflow(error: RealtimeError | undefined): boolean {
 // ---- Plugin entry
 
 export default function plugin(bb: BbPluginApi) {
+  // Read by the panel only.
+  bb.settings.define({
+    showLatency: { type: "boolean", label: "Show reply latency", description: "Show how long each reply took to become audible after you stopped speaking.", default: false },
+  });
   // One session per bb server. bb.events has no off(), so listeners route through this.
   const registry: { live: Session | null } = { live: null };
   bb.events.on("thread.idle", ({ thread }) => registry.live?.onThreadSettled(thread.id, "idle"));
