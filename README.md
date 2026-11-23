@@ -69,8 +69,8 @@ minutes.
   reply is on its way; a quiet double tick, a lookup is running.
 - **Mic bars:** they follow your mic. Faint bars are sound Phreak ignores as
   noise; full bars are speech it hears. Phreak filters out steady noise,
-  typing and knocks, and takes more to count as speech while it is talking,
-  so room noise doesn't cut it off.
+  typing and knocks. While it talks, only a clear voice at speaking volume
+  cuts it off, so speak up to interrupt; a loud voice nearby can still pass.
 - **Captions:** Phreak's words appear as it speaks. Yours appear as a "You …"
   line the moment you start talking and fill in once you pause.
 - **Latency:** turn on **Show reply latency** in Phreak's settings, or run
