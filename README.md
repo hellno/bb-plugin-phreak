@@ -55,7 +55,18 @@ announcements, unsend, drafts and new threads are still untested. See
 Open a thread, open the **Phreak** panel, press **Start**, and talk. Use
 headphones: speaker output can trigger the voice detection. The session ends
 when you press End, hide the panel, switch threads, or stay quiet 15 minutes.
-A soft pulse means a reply is on its way; a quiet double tick, a lookup is running.
+
+- **Shortcut:** <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> (Ctrl on
+  macOS too) starts or ends the session, opening the panel if it is hidden.
+  Rebind it in Settings → Keyboard.
+- **State:** a chip beside the buttons says Connecting, Listening, Muted,
+  Thinking, Looking up, Speaking, Reconnecting or Ended, and small bars move
+  while the mic hears you. A soft pulse means a reply is on its way; a quiet
+  double tick, a lookup is running.
+- **Captions:** Phreak's words appear as it speaks. Yours appear as a "You …"
+  line the moment you start talking and fill in once you pause.
+- **Latency:** turn on **Show reply latency** in Phreak's settings, or run
+  `bb plugin config phreak set showLatency true`.
 
 ## Develop
 

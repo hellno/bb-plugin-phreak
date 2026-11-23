@@ -1,12 +1,15 @@
-// Phreak's panel: Start/End, mute, status, live captions and one result line
-// per action, for the thread it sits beside, whose composer takes its drafts.
-import { useCallback, useEffect, useReducer, useRef } from "react";
+// Phreak's panel for the thread it sits beside: Start/End and Mute on one row
+// with a state chip, live captions, and a card per action. Drafts go into the
+// thread's composer. Ctrl+Shift+Space starts or ends, opening the panel if needed.
+import { useCallback, useEffect, useReducer, useRef, type MouseEvent, type RefObject, type UIEvent } from "react";
 import {
+  Markdown,
   definePluginApp,
   experimental_Icon as Icon,
   experimental_useSidebarThreads,
   experimental_useTabVisible,
   useComposer,
+  useSettings,
   type ExperimentalThreadTabProps,
 } from "@get-bb/plugin-sdk/app";
 import { SessionAudio, type Cue } from "./audio";
@@ -24,6 +27,8 @@ type PanelEvent =
   | { type: "playing"; playing: boolean }
   | { type: "latency"; ms: number };
 
+const AUDIO_CHECK_MS = 2_000;
+
 // Same-origin route, as in Voice Mode's session.ts (steveafrost/bb-plugin-voice-mode, MIT).
 function sessionUrl(threadId: string): string {
   const url = new URL(`/api/v1/plugins/${PLUGIN_ID}/http/${SESSION_PATH}`, location.href);
@@ -39,6 +44,8 @@ class Session {
   private opened = false;
   private closed = false;
   private thinkingAt: number | null = null; // when your speech ended, until the reply is audible
+  /** The mic's loudness from 0 to 1, for the level meter: rises at once, falls gently. Muted, it falls to 0. */
+  level = 0;
 
   // Must run inside the Start click: SessionAudio needs the user gesture. Throws if audio or the socket cannot start.
   constructor(
@@ -60,9 +67,17 @@ class Session {
       this.end(event.reason || (this.opened ? "The connection to Phreak closed." : "Could not reach the Phreak server."));
     this.audio
       .startMic((frame) => {
+        this.level = Math.max(loudness(frame), this.level * 0.8);
         if (this.ws.readyState === WebSocket.OPEN) this.ws.send(frame);
       })
-      .catch((error: unknown) => this.end(`Microphone unavailable: ${errorText(error)}`));
+      .catch((error: unknown) => this.end(`Microphone unavailable: ${error instanceof Error ? `${error.name}: ` : ""}${errorText(error)}`));
+    // A browser may keep audio off when no click or key press started it (Safari after the palette, say).
+    setTimeout(() => {
+      if (this.closed) return;
+      void this.audio.ensureRunning().then((running) => {
+        if (!running) this.end("The browser kept audio off. Press Start.");
+      });
+    }, AUDIO_CHECK_MS);
   }
 
   mute(muted: boolean): void {
@@ -134,6 +149,15 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** A PCM16 frame's loudness from 0 to 1: -55 dBFS (a quiet room) to -15 dBFS (close speech). */
+function loudness(frame: ArrayBuffer): number {
+  const pcm = new Int16Array(frame);
+  let sum = 0;
+  for (const sample of pcm) sum += sample * sample;
+  const rms = Math.sqrt(sum / Math.max(1, pcm.length)) / 0x8000;
+  return Math.min(1, Math.max(0, (20 * Math.log10(rms || 1e-9) + 55) / 40));
+}
+
 type Entry = (CaptionMessage | ActionMessage) & { key: string };
 
 interface View {
@@ -162,8 +186,11 @@ function reduce(view: View, event: PanelEvent): View {
       return { ...view, latencyMs: event.ms };
     case "interrupt":
       return { ...view, talking: true };
-    case "status":
-      return { ...view, state: event.state, talking: view.talking && event.state === "listening" };
+    case "status": {
+      // You started speaking (an interrupt, then listening; a reconnect's interrupt is followed by reconnecting).
+      const talking = view.talking && event.state === "listening";
+      return { ...view, state: event.state, talking, entries: talking ? withHearing(view.entries) : view.entries };
+    }
     case "lookups":
       return { ...view, lookups: event.running };
     case "error":
@@ -177,21 +204,78 @@ function reduce(view: View, event: PanelEvent): View {
   }
 }
 
+/** Your line while you speak, before the server has an item for it; your next caption takes its place. */
+const HEARING: Entry = { type: "caption", role: "user", itemId: "", text: "", final: false, key: "c:hearing" };
+
+/** Puts your speaking line last, moving one left behind by speech that never became an utterance. */
+function withHearing(entries: Entry[]): Entry[] {
+  return entries.at(-1)?.key === HEARING.key ? entries : [...entries.filter((entry) => entry.key !== HEARING.key), HEARING];
+}
+
 // Keyed by item, so an empty caption sent at commit holds the utterance's place until its text arrives.
 function upsertCaption(entries: Entry[], caption: CaptionMessage): Entry[] {
   const next: Entry = { ...caption, key: `c:${caption.itemId}` };
-  const index = entries.findIndex((entry) => entry.key === next.key);
+  let index = entries.findIndex((entry) => entry.key === next.key);
+  if (index === -1 && caption.role === "user") index = entries.findIndex((entry) => entry.key === HEARING.key);
   return index === -1 ? [...entries, next] : entries.map((entry, i) => (i === index ? next : entry));
 }
 
-const TOOL_LABEL: Record<ActionTool, string> = { send_to_chat: "Message", unsend_message: "Unsend", draft_message: "Draft", stop_agent: "Stop", answer_question: "Answer", start_thread: "New thread" };
+const TAB = { id: "phreak", context: { kind: "thread" }, availability: "action" } as const;
+// Voice Mode's Ctrl+Shift chord on Space, which bb and Voice Mode leave free. Ctrl on macOS too.
+const SHORTCUT = { key: "Space", control: true, shift: true };
+const PENDING_START_MS = 3_000;
+
+/** The mounted panels by thread, so the shortcut can reach them. */
+const panels = new Map<string, { visible: boolean; toggle: () => void }>();
+/** A shortcut press that opened a hidden panel: the panel starts once it shows, if that is soon. */
+let pendingStart: { threadId: string; at: number } | null = null;
+/** When the shortcut last toggled: a browser may also click the focused button on the Space key's release. */
+let shortcutAt = 0;
+
+/** What the chip shows: the session's state, with muted and lookups split out of listening. */
+type Shown = SessionState | "muted" | "lookup" | "ended";
+const CHIP: Record<Shown, { icon: string; fallback?: string; label: string; motion?: string }> = {
+  connecting: { icon: "Loading", label: "Connecting", motion: "animate-spin" },
+  reconnecting: { icon: "Loading", label: "Reconnecting", motion: "animate-spin" },
+  listening: { icon: "Mic", label: "Listening" },
+  muted: { icon: "phreak/mic-off", fallback: "Mic", label: "Muted" },
+  lookup: { icon: "Search", label: "Looking up", motion: "animate-pulse" },
+  thinking: { icon: "MoreHorizontal", label: "Thinking", motion: "animate-pulse" },
+  speaking: { icon: "phreak/audio-lines", fallback: "Play", label: "Speaking" },
+  ended: { icon: "Square", label: "Ended" },
+};
+
+const TOOLS: Record<ActionTool, { label: string; icon: string }> = {
+  send_to_chat: { label: "To agent", icon: "Sent" },
+  unsend_message: { label: "Unsend", icon: "ArrowTurnBackward" },
+  draft_message: { label: "Draft", icon: "Edit" },
+  stop_agent: { label: "Stop agent", icon: "Square" },
+  answer_question: { label: "Answer", icon: "MessageQuestion" },
+  start_thread: { label: "New thread", icon: "MessageSquarePlus" },
+};
 const PROBLEMS = new Set(["refused", "failed", "unknown"]);
+
+/** Endings that need nothing from you, said quietly. */
+const ROUTINE = /^(You ended|The Phreak panel was|The session reached|Ended after|A new(er)? Phreak session started|Phreak was reloaded|The conversation outgrew)/;
+/** The fix for each problem you can fix, matched on the server's or the browser's message. */
+const FIXES: [RegExp, string][] = [
+  [/not allowed to use the ChatGPT sign-in/i, "Allow Phreak in ChatGPT Realtime Connection's settings: add `phreak` to **Plugins that may use the sign-in**, then press Start."],
+  [/codex-realtime: .*unknown plugin/i, "Phreak's voice comes from the ChatGPT Realtime Connection plugin. Install it with `bb plugin install codex-realtime`, then press Start."],
+  [/codex-realtime: .*(not running|not enabled|disabled|no rpc method)/i, "ChatGPT Realtime Connection isn't running. Turn it on with `bb plugin enable codex-realtime`, or check `bb plugin list`, then press Start."],
+  [/no Codex login|no ChatGPT sign-in/i, "Sign in to Codex with ChatGPT on the machine running bb: run `codex login`, then press Start."],
+  [/expired|OpenAI refused or did not answer/i, "Renew the ChatGPT sign-in: run `codex` once on the machine running bb, then press Start."],
+  [/Microphone unavailable: .*(NotAllowedError|SecurityError|denied|not allowed)/i, "Allow this site to use your microphone in the browser, then press Start."],
+  [/Microphone unavailable: .*(NotFoundError|OverconstrainedError|not found|can ?not be found)/i, "Connect a microphone, then press Start."],
+  [/not served over https or localhost/i, "The microphone needs a secure page: open bb over https or on localhost."],
+  [/Could not reach the Phreak server|connection to Phreak closed/i, "Check that Phreak is running with `bb plugin list`, then press Start."],
+  [/closed the session during setup|connection dropped/i, "The voice connection dropped. Press Start to reconnect."],
+];
 
 const BUTTON =
   "inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 const PRIMARY = "bg-foreground text-background hover:bg-foreground/90";
-const DESTRUCTIVE = "bg-destructive text-destructive-foreground hover:bg-destructive/90";
-const OUTLINE = "border border-input bg-transparent hover:bg-state-hover aria-pressed:bg-state-active";
+const OUTLINE = "border border-border bg-transparent text-foreground hover:bg-state-hover";
+const MUTED = "border border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/15";
 
 function PhreakTab({ threadId }: ExperimentalThreadTabProps) {
   // Keyed so a thread change unmounts the panel, which ends its session.
@@ -202,6 +286,7 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   const visible = experimental_useTabVisible();
   const [view, dispatch] = useReducer(reduce, IDLE);
   const composer = useComposer();
+  const settings = useSettings();
   const session = useRef<Session | null>(null);
   const live = view.state !== null && view.state !== "ended";
   useEffect(() => {
@@ -219,14 +304,33 @@ function PhreakPanel({ threadId }: { threadId: string }) {
     composer.insert(text, { at: "end", block: true });
   };
 
+  const scroller = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLOListElement>(null);
+  const pinned = useRef(true); // following the newest line, until you scroll up
+  const lastTop = useRef(0);
+
   const start = () => {
     try {
       session.current = new Session(threadId, dispatch, draft);
     } catch (error) {
       return dispatch({ type: "ended", reason: `Phreak could not start: ${errorText(error)}` });
     }
+    pinned.current = true;
     dispatch({ type: "start" });
   };
+  const toggle = live ? () => end("You ended the session.") : start;
+  // Start moves between the empty panel and the top row, so focus follows the button you pressed.
+  const toggleButton = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  const onToggleClick = (event: MouseEvent) => {
+    if (event.detail === 0 && performance.now() - shortcutAt < 500) return; // the shortcut's own key release
+    refocus.current = true;
+    toggle();
+  };
+  useEffect(() => {
+    if (refocus.current) toggleButton.current?.focus();
+    refocus.current = false;
+  }, [live]);
 
   const toggleMute = () => {
     session.current?.mute(!view.muted);
@@ -240,6 +344,38 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   }, [visible, end]);
   useEffect(() => () => end("The Phreak panel was closed."), [end]);
 
+  useEffect(() => {
+    const entry = { visible, toggle };
+    panels.set(threadId, entry);
+    return () => {
+      if (panels.get(threadId) === entry) panels.delete(threadId);
+    };
+  });
+  useEffect(() => {
+    if (!visible || pendingStart?.threadId !== threadId) return;
+    const fresh = performance.now() - pendingStart.at < PENDING_START_MS;
+    pendingStart = null;
+    if (fresh && !live) start();
+  }, [visible, threadId]);
+
+  // Keeps the newest line in view as lines arrive, captions grow or the box shrinks, unless you scrolled up to read.
+  useEffect(() => {
+    const box = scroller.current;
+    if (!box || !list.current) return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) box.scrollTop = box.scrollHeight;
+    });
+    observer.observe(list.current);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
+  const onScroll = (event: UIEvent<HTMLDivElement>) => {
+    const box = event.currentTarget;
+    if (box.scrollHeight - box.scrollTop - box.clientHeight < 40) pinned.current = true;
+    else if (box.scrollTop < lastTop.current) pinned.current = false; // only your own scroll moves it up
+    lastTop.current = box.scrollTop;
+  };
+
   // The server says "listening" once it has sent the audio; playback can lag behind.
   const state = view.state === "listening" && view.playing ? "speaking" : view.state;
   // A soft pulse once a reply is 700 ms late; a sparse tick while lookups run and nobody speaks.
@@ -249,41 +385,65 @@ function PhreakPanel({ threadId }: { threadId: string }) {
     const timer = setTimeout(() => session.current?.cue(cue), cue === "wait" ? 700 : 0);
     return () => (clearTimeout(timer), session.current?.cue(null));
   }, [cue]);
+
+  const shown: Shown | null = state === "listening" ? (view.muted ? "muted" : view.lookups > 0 && !view.talking ? "lookup" : "listening") : state;
+  const announced =
+    shown === null
+      ? ""
+      : `${CHIP[shown].label}${view.muted && shown !== "muted" ? ", muted" : ""}.` +
+        (view.state === "ended" && view.reason !== null && ROUTINE.test(view.reason) ? ` ${view.reason}` : "");
+  const level = useCallback(() => session.current?.level ?? 0, []);
+  // Your newest line, the only empty one worth showing: it is still being heard or transcribed.
+  const hearingKey = live ? view.entries.filter((entry) => entry.type === "caption" && entry.role === "user").at(-1)?.key : undefined;
+  // Empty captions show only as your newest line in a live session: still being heard or transcribed.
+  const lines = view.entries.filter((entry) => entry.type === "action" || entry.text !== "" || entry.key === hearingKey);
+  const empty = lines.length === 0;
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-3 text-sm">
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          className={`${BUTTON} ${live ? DESTRUCTIVE : PRIMARY}`}
-          onClick={live ? () => end("You ended the session.") : start}
-        >
-          <Icon name={live ? "Square" : "Mic"} className="size-4" />
-          {live ? "End" : "Start"}
-        </button>
-        <button type="button" className={`${BUTTON} ${OUTLINE}`} aria-pressed={view.muted} disabled={!live} onClick={toggleMute}>
-          {view.muted ? "Unmute" : "Mute"}
-        </button>
-      </div>
-      <p className="text-muted-foreground" aria-live="polite">
-        {state === null ? "Press Start to talk this thread through." : state[0].toUpperCase() + state.slice(1)}
-        {view.reason ? ` · ${view.reason}` : null}
-        {view.latencyMs === null ? null : ` · latency ${view.latencyMs} ms`}
-      </p>
-      {view.error === null ? null : (
-        <p role="alert" className="break-words text-destructive">
-          {view.error}
-        </p>
-      )}
-      <div className="flex min-h-0 flex-1 flex-col-reverse overflow-y-auto">
-        <ol className="flex flex-col gap-3">
-          {view.entries.map((entry) =>
+    <div className="flex h-full min-h-0 flex-col text-sm">
+      {/* Screen readers hear state changes and quiet endings; captions stay silent. */}
+      <span role="status" className="sr-only">
+        {announced}
+      </span>
+      {live || !empty ? (
+        <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+          <button
+            ref={toggleButton}
+            type="button"
+            aria-label={live ? "End voice session" : "Start voice session"}
+            className={`${BUTTON} ${live ? OUTLINE : PRIMARY}`}
+            onClick={onToggleClick}
+          >
+            <Icon name={live ? "Square" : "Mic"} aria-hidden className={live ? "size-3.5 text-destructive" : "size-4"} />
+            {live ? "End" : "Start"}
+          </button>
+          {live ? (
+            <button type="button" className={`${BUTTON} ${view.muted ? MUTED : OUTLINE}`} onClick={toggleMute}>
+              <Icon name={view.muted ? "phreak/mic-off" : "Mic"} fallback="Mic" aria-hidden className="size-4" />
+              {view.muted ? "Unmute" : "Mute"}
+            </button>
+          ) : null}
+          <div className="ml-auto flex items-center gap-2">
+            {live ? <LevelMeter level={level} /> : null}
+            {shown === null ? null : <StateChip shown={shown} />}
+            {settings.values?.showLatency === true && view.latencyMs !== null ? (
+              <span className="text-xs tabular-nums text-muted-foreground" title="From the end of your speech to the first audible reply">
+                {view.latencyMs} ms
+              </span>
+            ) : null}
+          </div>
+        </header>
+      ) : null}
+      {view.error === null ? null : <Notice message={view.error} />}
+      {view.state === "ended" && view.reason !== null ? <Notice message={view.reason} /> : null}
+      <div ref={scroller} onScroll={onScroll} className="relative min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        {empty && !live ? <StartHere buttonRef={toggleButton} onStart={onToggleClick} /> : null}
+        {empty && live && shown !== null ? <Waiting level={level} label={CHIP[shown].label} /> : null}
+        <ol ref={list} aria-label="Conversation" className="flex flex-col gap-5">
+          {lines.map((entry) =>
             entry.type === "action" ? (
-              <ActionLine key={entry.key} action={entry} />
-            ) : entry.text === "" ? null : (
-              <li key={entry.key}>
-                <div className="text-xs font-medium text-muted-foreground">{entry.role === "user" ? "You" : "Phreak"}</div>
-                <p className={entry.final ? "break-words" : "break-words text-muted-foreground"}>{entry.text}</p>
-              </li>
+              <ActionCard key={entry.key} action={entry} />
+            ) : (
+              <Caption key={entry.key} caption={entry} />
             ),
           )}
         </ol>
@@ -292,18 +452,132 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   );
 }
 
-/** bb's own status for the action, as the model got it. */
-function ActionLine({ action }: { action: ActionMessage }) {
+/** Before the first session, or after one that said nothing: the one thing to do. */
+function StartHere({ buttonRef, onStart }: { buttonRef: RefObject<HTMLButtonElement | null>; onStart: (event: MouseEvent) => void }) {
   return (
-    <li className="rounded-md border border-border bg-card px-3 py-2">
-      <div className="text-xs text-muted-foreground">
-        {`${TOOL_LABEL[action.tool]} · `}
-        <span className={PROBLEMS.has(action.status) ? "font-medium text-destructive" : "font-medium text-foreground"}>{action.status}</span>
-        {action.detail ? ` · ${action.detail}` : null}
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-muted-foreground">
+      <Icon name="Mic" aria-hidden className="size-6" />
+      <button ref={buttonRef} type="button" aria-label="Start voice session" className={`${BUTTON} ${PRIMARY}`} onClick={onStart}>
+        Start
+      </button>
+      <p className="text-xs">Best with headphones</p>
+    </div>
+  );
+}
+
+/** A live session before anyone spoke: the mic level, big, so you can see it hears you. */
+function Waiting({ level, label }: { level: () => number; label: string }) {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+      <LevelMeter level={level} large />
+      <p className="text-xs">{label}</p>
+    </div>
+  );
+}
+
+/** The session's state as an icon and a word, so it never rests on color alone. */
+function StateChip({ shown }: { shown: Shown }) {
+  const chip = CHIP[shown];
+  const tone = shown === "muted" ? "border-destructive/50 text-destructive" : "border-border text-foreground";
+  return (
+    <span aria-hidden className={`inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium ${tone}`}>
+      <Icon name={chip.icon} fallback={chip.fallback} className={`size-3.5 motion-reduce:animate-none ${chip.motion ?? ""}`} />
+      {chip.label}
+    </span>
+  );
+}
+
+const BAR_SHAPE = [0.55, 1, 0.75, 0.4];
+
+/** Thin bars that follow the mic: they move while it hears you and lie flat while silent or muted. */
+function LevelMeter({ level, large = false }: { level: () => number; large?: boolean }) {
+  const bars = useRef<(HTMLSpanElement | null)[]>([]);
+  useEffect(() => {
+    let frame = requestAnimationFrame(function draw() {
+      const value = level();
+      bars.current.forEach((bar, i) => bar?.style.setProperty("transform", `scaleY(${0.15 + 0.85 * value * BAR_SHAPE[i]})`));
+      frame = requestAnimationFrame(draw);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [level]);
+  return (
+    <span aria-hidden title="Microphone level" className={`flex items-center motion-reduce:hidden ${large ? "h-10 gap-1.5" : "h-4 gap-0.5"}`}>
+      {BAR_SHAPE.map((_, i) => (
+        <span
+          key={i}
+          ref={(bar) => {
+            bars.current[i] = bar;
+          }}
+          style={{ transform: "scaleY(0.15)" }}
+          className={`h-full rounded-full bg-muted-foreground ${large ? "w-1" : "w-0.5"}`}
+        />
+      ))}
+    </span>
+  );
+}
+
+/** One spoken turn, written in place: grey while it is still being heard, normal once final. */
+function Caption({ caption }: { caption: CaptionMessage }) {
+  return (
+    <li>
+      <div className="mb-1 text-xs font-medium text-muted-foreground">{caption.role === "user" ? "You" : "Phreak"}</div>
+      {caption.text === "" ? (
+        // Your words arrive once you pause; until then this holds their place, so later lines do not move.
+        <p aria-hidden className="animate-pulse text-muted-foreground motion-reduce:animate-none">
+          …
+        </p>
+      ) : (
+        <p className={`whitespace-pre-wrap break-words leading-relaxed ${caption.final ? "text-foreground" : "text-muted-foreground"}`}>{caption.text}</p>
+      )}
+    </li>
+  );
+}
+
+/** What an action did: bb's own status, then the text as the chat shows it. */
+function ActionCard({ action }: { action: ActionMessage }) {
+  const tool = TOOLS[action.tool];
+  const problem = PROBLEMS.has(action.status);
+  return (
+    <li className="rounded-lg border border-border bg-card px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
+        <Icon name={tool.icon} aria-hidden className="size-3.5 text-muted-foreground" />
+        <span className="font-medium text-foreground">{tool.label}</span>
+        <span aria-hidden className="text-muted-foreground">
+          ·
+        </span>
+        <span className={problem ? "inline-flex items-center gap-1 font-medium text-destructive" : "text-muted-foreground"}>
+          {problem ? <Icon name="AlertCircle" aria-hidden className="size-3.5" /> : null}
+          {action.status[0].toUpperCase() + action.status.slice(1)}
+        </span>
       </div>
-      {action.text ? <p className="mt-1 whitespace-pre-wrap break-words">{action.text}</p> : null}
+      {action.detail ? <p className="mt-1 break-words text-xs text-muted-foreground">{action.detail}</p> : null}
+      {action.text ? <Markdown content={action.text} className="mt-2 break-words" /> : null}
       {action.threadId ? <NewThreadLink threadId={action.threadId} /> : null}
     </li>
+  );
+}
+
+/** Why the session ended or what went wrong: routine endings quietly, problems with the fix first. */
+function Notice({ message }: { message: string }) {
+  if (ROUTINE.test(message)) return <p className="px-4 pt-3 text-xs text-muted-foreground">{message}</p>;
+  const fix = FIXES.find(([pattern]) => pattern.test(message))?.[1];
+  return (
+    <div role="alert" className="mx-4 mt-3 flex gap-2 rounded-lg border border-border px-3 py-2.5">
+      <Icon name="AlertCircle" aria-hidden className="mt-0.5 size-4 shrink-0 text-destructive" />
+      <div className="min-w-0 flex-1 break-words">
+        {fix ? (
+          <>
+            <Markdown content={fix} />
+            <details className="mt-1 text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none">Details</summary>
+              <p className="mt-1">{message}</p>
+            </details>
+          </>
+        ) : (
+          <p className="leading-relaxed text-foreground">{message}</p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -312,6 +586,7 @@ function NewThreadLink({ threadId }: { threadId: string }) {
   const href = experimental_useSidebarThreads().threads.find((thread) => thread.id === threadId)?.href;
   return href ? (
     <a href={href} target="_blank" rel="noreferrer" className={`${BUTTON} ${OUTLINE} mt-2`}>
+      <Icon name="ExternalLink" aria-hidden className="size-4" />
       Open in a new tab
     </a>
   ) : null;
@@ -319,13 +594,26 @@ function NewThreadLink({ threadId }: { threadId: string }) {
 
 export default definePluginApp((app) => {
   app.slots.experimental_tab({
-    context: { kind: "thread" },
-    availability: "action",
-    id: "phreak",
+    ...TAB,
     title: "Phreak",
     tooltip: "Talk this thread through by voice",
     icon: "Mic",
     layout: "flush",
     component: PhreakTab,
+  });
+  app.commands.register({
+    id: "toggle",
+    title: "Phreak: start or end voice",
+    defaultShortcut: SHORTCUT,
+    isAvailable: ({ threadId }) => threadId !== null,
+    run({ threadId, experimental_panel }) {
+      if (threadId === null) return;
+      shortcutAt = performance.now();
+      const panel = panels.get(threadId);
+      if (panel?.visible) return panel.toggle();
+      // A session needs its panel on screen: open it, and it starts once it shows.
+      pendingStart = { threadId, at: shortcutAt };
+      if (!experimental_panel.openTab({ tab: TAB, title: "Phreak" })) pendingStart = null;
+    },
   });
 });

@@ -39,7 +39,7 @@ bb's side chat is the closest in spirit but text only.
 | Sending | Immediately when you ask. No confirmation step. |
 | Authorization | The voice model decides from your words, in any phrasing. No phrase lists or other hardcoded gates. |
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |
-| Repo | Public and lean. Zero settings, one voice (`marin`), `semantic_vad`, no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
+| Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad`, no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
 
 Proposed but not yet confirmed: the name, the MIT licence and the panel UI.
 
@@ -180,11 +180,38 @@ from one.
 
 ### 4.7 Panel
 
-A "Phreak" thread tab (`app.slots.experimental_tab`): Start/End, mute, a status
-line with latency, live captions, and one line per action with bb's status and
-the exact text. A new thread's line links it in a new browser tab (its `href`
-from `experimental_useSidebarThreads()`): opening it in bb would unmount the
-panel and end the session.
+A "Phreak" thread tab (`app.slots.experimental_tab`).
+
+- **Empty panel:** a mic and one Start button. Once live and before anyone
+  speaks, a large mic level meter and the state.
+- **Top row**, once there is a session or a transcript: Start, or an outlined
+  End with a red square; Mute, which turns red and reads Unmute with a
+  crossed-out mic while muted; a four-bar mic level meter (hidden under reduced
+  motion); and a state chip, an icon and a word: Connecting, Listening, Muted,
+  Looking up, Thinking, Speaking, Reconnecting or Ended. The latency follows
+  the chip only when the `showLatency` setting is on (off by default).
+- **Screen readers** hear the chip's word (with "muted" while muted) and
+  routine endings through a status region. Captions stay silent.
+- **Captions** update in place: grey until final. Your line appears as "You …"
+  when speech starts (`interrupt` then `listening`). Your words fill it in after
+  you pause: the Realtime API transcribes a turn once it is committed. Only
+  your newest empty line shows, so a failed transcription disappears at your
+  next turn. The list follows the newest line unless you scroll up.
+- **Action cards** show bb's status, the detail, and the text through bb's
+  `Markdown`, as the chat shows it.
+- **Problems** lead with the fix (for example, add `phreak` to
+  codex-realtime's allowed plugins), with the message under Details.
+- **Shortcut:** Ctrl+Shift+Space (`app.commands`, rebindable) starts or ends
+  the session. While the panel is hidden, it opens the panel, which starts
+  once it shows (within 3 s). If the browser still holds audio suspended after
+  2 s (no key press or click started it), Phreak resumes it once more and, if
+  that fails, ends the session and asks for Start.
+- **Icons:** bb's icon set, plus two declared in the manifest
+  (`phreak/mic-off`, `phreak/audio-lines`).
+
+A new thread's card links it in a new browser tab (its `href` from
+`experimental_useSidebarThreads()`): opening it in bb would unmount the panel
+and end the session.
 A draft goes into this thread's composer (`useComposer().insert(text, { at:
 "end", block: true })`), after any draft there and even off screen. The panel
 opens the same-origin route `/api/v1/plugins/phreak/http/session?threadId=…`
@@ -197,7 +224,7 @@ fork's answers. Nothing goes out before Start, and nothing is stored.
 
 ## 5. Not in v1
 
-Persistence and resume, overlays or shortcuts, push-to-talk, settings, Phreak
+Persistence and resume, overlays, push-to-talk, settings beyond latency, Phreak
 writing files or running commands itself, an API-key provider, WebRTC, unit
 tests.
 
@@ -208,7 +235,7 @@ tests.
 | OpenAI stops accepting the Codex sign-in for Realtime. | The provider is a plugin contract; another `realtimeConnection` plugin can replace it. |
 | `experimental_` SDK APIs change. | The SDK is pinned; re-check on each bb update. |
 | The model writes the wrong message, or text planted in the chat or a file steers it into an action you did not ask for. The owner chose natural phrasing over hardcoded checks. | Actions are bound to the session's thread, the panel shows every one, and "stop it" stops the turn. |
-| Latency through bb Connect. | Shown on the panel; WebRTC is the fallback plan. |
+| Latency through bb Connect. | Shown on the panel with the `showLatency` setting; WebRTC is the fallback plan. |
 
 ## 7. Credits
 

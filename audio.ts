@@ -60,6 +60,13 @@ export class SessionAudio {
     this.ctx.resume().catch(() => undefined);
   }
 
+  /** Whether audio can run: a suspended context gets one more resume, which a browser may ignore without a key press or click. */
+  async ensureRunning(): Promise<boolean> {
+    if (this.ctx.state !== "suspended") return true; // running, or briefly interrupted while the device switches
+    const resumed = this.ctx.resume().then(() => true, () => false);
+    return Promise.race([resumed, new Promise<boolean>((resolve) => setTimeout(resolve, 1_000, false))]);
+  }
+
   /** Muted, the track sends silence: frames keep flowing, so voice detection hears your turn end. */
   setMuted(muted: boolean): void {
     this.muted = muted;

@@ -17,7 +17,11 @@
     "name": "Phreak",
     "description": "Talk a thread through with a voice model that knows the whole chat, then say \"send that\". Runs on your ChatGPT plan via codex-realtime.",
     "branding": {
-      "icon": "Mic"
+      "icon": "Mic",
+      "experimental_icons": {
+        "mic-off": "./icons/mic-off.svg",
+        "audio-lines": "./icons/audio-lines.svg"
+      }
     },
     "server": "./server.ts",
     "app": "./app.tsx"
