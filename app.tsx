@@ -243,10 +243,10 @@ const CHIP: Record<Shown, { icon: string; fallback?: string; label: string; moti
 };
 
 const TOOLS: Record<ActionTool, { label: string; icon: string }> = {
-  send_to_chat: { label: "Message", icon: "Sent" },
+  send_to_chat: { label: "To agent", icon: "Sent" },
   unsend_message: { label: "Unsend", icon: "ArrowTurnBackward" },
   draft_message: { label: "Draft", icon: "Edit" },
-  stop_agent: { label: "Stop", icon: "Square" },
+  stop_agent: { label: "Stop agent", icon: "Square" },
   answer_question: { label: "Answer", icon: "MessageQuestion" },
   start_thread: { label: "New thread", icon: "MessageSquarePlus" },
 };
