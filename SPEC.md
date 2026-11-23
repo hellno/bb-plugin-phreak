@@ -1,9 +1,9 @@
 # Phreak spec
 
-Status: plugin v0.1, 2026-11-22. A scripted spoken test through the server
-passed (reply, lookup, send; ~0.8 s to first audio). The browser panel,
-answering cards by voice, announcements, unsend, drafts and new threads are
-untested.
+Status: plugin v0.1, 2026-11-23. A scripted spoken test through the server
+passed (reply, lookup, send; ~0.8 s to first audio), and the owner uses the
+panel. Not yet tested by voice: announcements, unsend, drafts, new threads and
+answering question cards.
 
 ## 1. What Phreak is
 
@@ -28,10 +28,11 @@ picked.
 
 ## 2. Why another voice plugin
 
-Voice Mode (steveafrost, MIT) relays each utterance verbatim and its model sees
-little of the chat. Hands-Free (mattwynne) sends dictation without discussion.
-Handsfree (swairshah) needs `gpt-live-1`, which refuses the ChatGPT sign-in.
-bb's side chat is the closest in spirit but text only.
+bb already has voice plugins: Voice Mode, Hands-Free, Handsfree and BB Live.
+Phreak is a second participant rather than a relay: it discusses the thread
+with you and hands work to the agent only when you say so, and it runs on the
+ChatGPT plan through `codex-realtime`. bb's side chat is the closest in spirit
+but text only.
 
 ## 3. Owner decisions (2026-11-22)
 
@@ -45,7 +46,7 @@ bb's side chat is the closest in spirit but text only.
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |
 | Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad` (low eagerness, near-field noise reduction for headsets), no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
 
-Proposed but not yet confirmed: the name, the MIT licence and the panel UI.
+The MIT licence was confirmed on 2026-11-23. Proposed but not yet confirmed: the name.
 
 ## 4. Architecture
 
