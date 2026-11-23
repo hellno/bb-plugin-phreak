@@ -393,9 +393,10 @@ function PhreakPanel({ threadId }: { threadId: string }) {
       : `${CHIP[shown].label}${view.muted && shown !== "muted" ? ", muted" : ""}.` +
         (view.state === "ended" && view.reason !== null && ROUTINE.test(view.reason) ? ` ${view.reason}` : "");
   const level = useCallback(() => session.current?.level ?? 0, []);
-  // Your newest line, the only empty one worth showing: it is still being heard or transcribed.
-  const hearingKey = live ? view.entries.filter((entry) => entry.type === "caption" && entry.role === "user").at(-1)?.key : undefined;
-  // Empty captions show only as your newest line in a live session: still being heard or transcribed.
+  // An empty caption shows only as your newest line while you talk or Phreak thinks: still being heard or transcribed.
+  // Once Phreak answers or listens again it hides, so a start that held no words does not linger; late words still fill it in.
+  const hearing = live && (view.talking || view.state === "thinking");
+  const hearingKey = hearing ? view.entries.filter((entry) => entry.type === "caption" && entry.role === "user").at(-1)?.key : undefined;
   const lines = view.entries.filter((entry) => entry.type === "action" || entry.text !== "" || entry.key === hearingKey);
   const empty = lines.length === 0;
   return (

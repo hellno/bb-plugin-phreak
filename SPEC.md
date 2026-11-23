@@ -43,7 +43,7 @@ bb's side chat is the closest in spirit but text only.
 | Sending | Immediately when you ask. No confirmation step. |
 | Authorization | The voice model decides from your words, in any phrasing. No phrase lists or other hardcoded gates. |
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |
-| Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad`, no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
+| Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad` (low eagerness, near-field noise reduction for headsets), no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
 
 Proposed but not yet confirmed: the name, the MIT licence and the panel UI.
 
@@ -87,6 +87,13 @@ unchecked. Usage counts against the plan.
   suppression and auto gain, from an AudioWorklet (or `ScriptProcessor`) on a
   24 kHz AudioContext. Mute disables the mic track, which then sends silence,
   so voice detection still hears your turn end.
+- **Voice detection:** OpenAI's `semantic_vad` with `eagerness: "low"`, so a
+  pause mid-sentence does not end your turn (it waits up to 8 s, against 4 s by
+  default). `noise_reduction: { type: "near_field" }`, tuned for headset mics,
+  filters the input before voice detection, so background noise starts fewer
+  turns; a laptop mic may do worse with it. Each session logs its counts at the
+  end, with no words: speech starts, turns, turns without words, and replies
+  cut off.
 - **Down:** a JSON `audio_start { itemId }` precedes each assistant item's PCM.
   The browser schedules it gaplessly and counts the samples played per item.
 - **Barge-in:** on `speech_started` the server sends `interrupt`, stops
@@ -201,9 +208,10 @@ A "Phreak" thread tab (`app.slots.experimental_tab`).
   routine endings through a status region. Captions stay silent.
 - **Captions** update in place: grey until final. Your line appears as "You …"
   when speech starts (`interrupt` then `listening`). Your words fill it in after
-  you pause: the Realtime API transcribes a turn once it is committed. Only
-  your newest empty line shows, so a failed transcription disappears at your
-  next turn. The list follows the newest line unless you scroll up.
+  you pause: the Realtime API transcribes a turn once it is committed. An empty
+  line shows only as your newest line while you talk or Phreak thinks, so a
+  start that held no words disappears once Phreak answers or listens again.
+  The list follows the newest line unless you scroll up.
 - **Action cards** show bb's status, the detail, and the text through bb's
   `Markdown`, as the chat shows it.
 - **Problems** lead with the fix (for example, add `phreak` to

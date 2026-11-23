@@ -55,9 +55,11 @@ announcements, unsend, drafts and new threads are still untested. See
 
 ## Use
 
-Open a thread, open the **Phreak** panel, press **Start**, and talk. Use
-headphones: speaker output can trigger the voice detection. The session ends
-when you press End, hide the panel, switch threads, or stay quiet 15 minutes.
+Open a thread, open the **Phreak** panel, press **Start**, and talk. Use a
+headset: speaker output can trigger the voice detection, and Phreak filters
+noise for a close mic. Pauses mid-sentence don't end your turn. The session
+ends when you press End, hide the panel, switch threads, or stay quiet 15
+minutes.
 
 - **Shortcut:** <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> (Ctrl on
   macOS too) starts or ends the session, opening the panel if it is hidden.

@@ -41,8 +41,11 @@ const SESSION_CONFIG = {
     input: {
       format: { type: "audio/pcm", rate: SAMPLE_RATE },
       transcription: { model: "gpt-4o-mini-transcribe" },
+      // Filters the input before voice detection and the model, so background noise starts fewer turns. Tuned for headset mics.
+      noise_reduction: { type: "near_field" },
       // Phreak creates every response itself, so only a completed, uninterrupted one runs its calls.
-      turn_detection: { type: "semantic_vad", create_response: false, interrupt_response: true },
+      // Low eagerness waits out pauses mid-sentence (up to 8 s, against 4 s by default) before ending your turn.
+      turn_detection: { type: "semantic_vad", eagerness: "low", create_response: false, interrupt_response: true },
     },
     output: { format: { type: "audio/pcm", rate: SAMPLE_RATE }, voice: "marin" },
   },
@@ -180,6 +183,8 @@ class Session {
   private readonly answers = new Map<string, (answer: ClientMessage | null) => void>();
   private readonly hardLimit = setTimeout(() => this.end("The session reached its 60-minute limit."), MAX_SESSION_MS);
   private readonly silence = setTimeout(() => this.end("Ended after 15 minutes of silence."), SILENCE_MS);
+  /** Turn-taking counts, logged at the end without any words, to tell false starts from early stops. */
+  private readonly turns = { starts: 0, commits: 0, wordless: 0, cutOff: 0 };
 
   constructor(
     private readonly bb: BbPluginApi,
@@ -268,6 +273,8 @@ class Session {
     this.attempt?.close();
     this.lookups.close();
     if (detail) this.bb.log.warn(`session ${this.id} (${this.threadId}): ${reason} ${detail}`);
+    const { starts, commits, wordless, cutOff } = this.turns;
+    this.bb.log.info(`session ${this.id}: ${starts} speech starts, ${commits} turns, ${wordless} without words, ${cutOff} replies cut off`);
     this.toBrowser({ type: "ended", reason: detail ? `${reason} ${detail}` : reason });
     this.browser.close(1000);
   }
@@ -330,6 +337,8 @@ class Session {
       case "input_audio_buffer.speech_started":
         this.silence.refresh();
         a.userSpeaking = true;
+        this.turns.starts++;
+        if (a.response && !a.response.interrupted) this.turns.cutOff++;
         if (a.response) a.response.interrupted = true;
         this.toBrowser({ type: "interrupt" });
         this.status("listening");
@@ -379,6 +388,7 @@ class Session {
 
   private onCommitted(a: Attempt, itemId: string): void {
     a.userSpeaking = false;
+    this.turns.commits++;
     // Holds the utterance's place in the captions and the recap ahead of the reply it triggers.
     this.line(itemId, "User");
     this.toBrowser({ type: "caption", role: "user", itemId, text: "", final: false });
@@ -393,6 +403,7 @@ class Session {
     if (line.final) return;
     line.text = final ? text.trim() : line.text + text;
     line.final = final;
+    if (final && who === "User" && !line.text) this.turns.wordless++;
     if (line.text) this.toBrowser({ type: "caption", role: who === "User" ? "user" : "assistant", itemId, text: line.text, final });
   }
 
