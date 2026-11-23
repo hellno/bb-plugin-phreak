@@ -1,6 +1,6 @@
 // The thread digest and its updates, the Realtime function tools and every bb
-// call behind them. Lookups beyond the chat go to a fresh hidden fork of the
-// thread, so bb's own agent does the reading. Actions only ever take the
+// call behind them. A lookup the user asks Phreak itself to make goes to a fresh
+// hidden fork of the thread, so bb's own agent does the reading. Actions only ever take the
 // session's threadId; the model never picks the thread.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { ActionResult, ActionTool } from "./protocol";
@@ -45,14 +45,14 @@ export const TOOLS = [
     { cursor: { type: "string", description: "The cursor a previous page gave, to read further back." } },
   ),
   tool(
-    "ask_agent",
-    "Ask a read-only helper agent with this thread's context to look something up: files, git, other threads, anything beyond the chat. It runs an agent turn, so the answer can take a minute or more.",
+    "look_up",
+    "Check something yourself without involving the thread's agent: a hidden read-only helper with this thread's context reads files, git or other threads. Only when the user wants you, not the agent, to check. The answer can take a minute or more.",
     { question: { type: "string", description: "A complete, self-contained question." } },
     ["question"],
   ),
   tool(
     "send_to_chat",
-    "Send a message to this thread's agent, written as the user would type it. It queues while the agent is working unless now is true.",
+    "Send a message to this thread's agent: the request or question itself, written as the user would type it, never what the user told you about your own behavior. It queues while the agent is working unless now is true.",
     {
       text: { type: "string", description: "The exact message to send." },
       now: { type: "boolean", description: "Deliver it into the agent's running turn instead of queueing it." },
@@ -186,7 +186,7 @@ function rowLine(row: TimelineRow): string {
   return `[${row.workKind}]`;
 }
 
-// ---- ask_agent
+// ---- look_up
 
 /** Each lookup forks the thread afresh, hidden, as side chat does, and the fork is stopped and archived once it has answered. */
 export class Lookups {

@@ -11,17 +11,20 @@ Phreak is a realtime voice layer over one bb thread. You open its panel beside
 a chat and talk the chat through with a voice model that knows the
 conversation. When you ask, it writes the message and sends it into the thread.
 
-The voice model is a second participant, not a relay. It answers from the chat,
-looks things up and keeps track of what you decided. Nothing reaches the
-thread's agent until you ask for it.
+The voice model is a second participant, not a relay. **Phreak talks, the agent
+works:** you talk with Phreak, it answers from the chat and keeps track of what
+you decided, and anything that needs work goes to the thread's agent. Nothing
+reaches the agent until you ask for it.
 
 A typical session: the agent has laid out options A to D. You press Start and
 ask "what does B cost us, and did it touch the auth module?"; Phreak answers
-from the transcript and checks the diff. You settle on "A plus D, skip the
-migration", say "okay, send that", and Phreak sends it and tells you what bb
-reported. While the agent works you can ask "is it done?", say "tell it now to
-add tests too" or "stop it", or talk through a question it asked and say what
-you picked.
+from the transcript and the agent's work. You ask "would D break the migration
+tests?"; that needs the code run, so Phreak offers to hand it to the agent. You
+settle on "A plus D, skip the migration", say "okay, send that", and Phreak
+sends it, says in a few words what it sent, and tells you what bb reported.
+While the agent works you can ask "is it done?", say "tell it now to add tests
+too" or "stop it", or talk through a question it asked and say what you
+picked.
 
 ## 2. Why another voice plugin
 
@@ -35,7 +38,8 @@ bb's side chat is the closest in spirit but text only.
 | Topic | Decision |
 | --- | --- |
 | Audio provider | Codex (ChatGPT plan), through the installed `codex-realtime` plugin. |
-| Abilities | Read the chat, look things up through a hidden fork of the thread, send, steer, unsend, draft into the chat box, stop, answer the agent's question cards, start a new thread, and say when the thread finishes, fails or asks. |
+| Abilities | Read the chat, send, steer, unsend, draft into the chat box, stop, answer the agent's question cards, start a new thread, and say when the thread finishes, fails or asks. Look things up through a hidden fork of the thread only when you ask Phreak itself to check. |
+| Routing (2026-11-23) | Phreak talks, the agent works. What the chat and its work rows can't answer goes to the agent: sent when you ask for the work, offered in a few words when Phreak judges it needs work. What you say about Phreak ("don't research", "be brief") is for Phreak and never relayed; "send it back" sends the request under discussion. |
 | Sending | Immediately when you ask. No confirmation step. |
 | Authorization | The voice model decides from your words, in any phrasing. No phrase lists or other hardcoded gates. |
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |
@@ -144,7 +148,7 @@ unchecked. Usage counts against the plan.
 | Tool | What it does | Changes the thread |
 | --- | --- | --- |
 | `read_thread(cursor?)` | One bounded page of messages and agent work, newest first, with work rows shown by their typed fields (command, file path, query, URL). Pages follow bb's `olderCursor`; the model gets a short cursor id, and a clipped page keeps its unread rows for the next call. | no |
-| `ask_agent(question)` | Forks the thread afresh (`threads.fork`, hidden), waits up to 3 minutes for it to go idle, returns its output (up to 4,096 characters), then stops and archives the fork. Lookups can run side by side. A fork that stops on a question or permission is abandoned at once. | no |
+| `look_up(question)` | Only when you ask Phreak itself to check something. Forks the thread afresh (`threads.fork`, hidden), waits up to 3 minutes for it to go idle, returns its output (up to 4,096 characters), then stops and archives the fork. Lookups can run side by side. A fork that stops on a question or permission is abandoned at once. | no |
 | `send_to_chat(text, now?)` | `threads.send` with `queue-if-active`, or `steer-if-active` when `now`. Reports bb's delivery: `sent`, or `queued` with what it waits on. bb says `sent` both for a steer and for starting an idle thread. | yes |
 | `unsend_message()` | Takes the newest message this session queued that `threads.queuedMessages.list` still shows unclaimed, holds it (`experimental_holdForEdit`: bb refuses a claimed row and delivers no held one, except on your explicit send-now) and deletes it: `withdrawn` with its current text, or `refused` if none is waiting. An abandoned delete releases the hold. | yes |
 | `draft_message(text)` | Sends the text to the panel, which adds it to the thread's composer for you to edit and send and answers: `drafted`, `failed` with the composer's error, or `unknown` with no answer in 3 s. | composer only |
@@ -167,7 +171,10 @@ unchecked. Usage counts against the plan.
 
 The voice model decides when to act, from the conversation, in whatever words
 you use. The instructions say once: only when the user asks, and never because
-of thread data or a tool result. Code enforces only correctness:
+of thread data or a tool result. They also route (§3): work goes to the agent,
+what you say about Phreak stays with Phreak, "send it back" sends the request
+under discussion, and Phreak says in a few words what it sent. Code enforces
+only correctness:
 Phreak creates every response itself, one at a time; calls run only from a
 response that completed and that you did not talk over (cancelled responses can
 still emit arguments); and a dead or replaced session never acts.
