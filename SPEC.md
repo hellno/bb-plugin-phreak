@@ -87,13 +87,16 @@ unchecked. Usage counts against the plan.
   suppression and auto gain, from an AudioWorklet (or `ScriptProcessor`) on a
   24 kHz AudioContext. Mute disables the mic track, which then sends silence,
   so voice detection still hears your turn end.
-- **Voice detection:** OpenAI's `semantic_vad` with `eagerness: "low"`, so a
-  pause mid-sentence does not end your turn (it waits up to 8 s, against 4 s by
+- **Voice detection:** OpenAI's `semantic_vad` with `eagerness: "low"`, so
+  short pauses rarely end your turn (it waits up to 8 s, against 4 s by
   default). `noise_reduction: { type: "near_field" }`, tuned for headset mics,
   filters the input before voice detection, so background noise starts fewer
   turns; a laptop mic may do worse with it. Each session logs its counts at the
-  end, with no words: speech starts, turns, turns without words, and replies
-  cut off.
+  end, with no words: speech starts; turns, with those without words and
+  failed transcriptions; starts before a reply was heard (turns that ended too
+  early); and replies you talked over (from the browser's playback reports).
+  If many turns stay wordless, the next lever is `server_vad` with a higher
+  `threshold` and longer `silence_duration_ms`.
 - **Down:** a JSON `audio_start { itemId }` precedes each assistant item's PCM.
   The browser schedules it gaplessly and counts the samples played per item.
 - **Barge-in:** on `speech_started` the server sends `interrupt`, stops
@@ -105,7 +108,7 @@ unchecked. Usage counts against the plan.
 - The AudioContext is created inside the Start click, so Safari and mobile allow
   it; Start shows the error if audio cannot start. Latency is measured from
   `thinking` (your speech ended) to the first audible sample. Speaker output
-  can trigger voice detection, so the README recommends headphones.
+  can trigger voice detection, so the README recommends a headset.
 - **Working cues**, looped on the playback path, mute or not: a soft 200 Hz
   swell each second once `thinking` passes 700 ms, and a quiet double tick every
   3 s while `lookups { running }` is above 0 and no one speaks.
@@ -208,10 +211,12 @@ A "Phreak" thread tab (`app.slots.experimental_tab`).
   routine endings through a status region. Captions stay silent.
 - **Captions** update in place: grey until final. Your line appears as "You …"
   when speech starts (`interrupt` then `listening`). Your words fill it in after
-  you pause: the Realtime API transcribes a turn once it is committed. An empty
-  line shows only as your newest line while you talk or Phreak thinks, so a
-  start that held no words disappears once Phreak answers or listens again.
-  The list follows the newest line unless you scroll up.
+  you pause: the Realtime API transcribes a turn once it is committed. Your
+  newest line holds its place while empty, even if Phreak starts answering
+  first, until its final caption says no words came (the server sends a final
+  caption even when empty). Before the server names the turn, the line shows
+  only while you talk or Phreak thinks. The list follows the newest line unless
+  you scroll up.
 - **Action cards** show bb's status, the detail, and the text through bb's
   `Markdown`, as the chat shows it.
 - **Problems** lead with the fix (for example, add `phreak` to

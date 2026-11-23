@@ -29,7 +29,7 @@ export type ServerMessage =
   | { type: "audio_start"; itemId: string }
   /** Flush all playback, then reply with `played`. Sent on barge-in and on reconnect. */
   | { type: "interrupt" }
-  /** `text` is the full text so far for this item. An empty user caption at commit reserves its place. */
+  /** `text` is the full text so far for this item. An empty user caption at commit reserves its place; a final empty one says no words came. */
   | { type: "caption"; role: "user" | "assistant"; itemId: string; text: string; final: boolean }
   | ({ type: "action"; tool: ActionTool } & ActionResult)
   /** Text for the panel to add to its thread's composer, after any draft there; the panel answers `drafted`. */

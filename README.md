@@ -57,7 +57,7 @@ announcements, unsend, drafts and new threads are still untested. See
 
 Open a thread, open the **Phreak** panel, press **Start**, and talk. Use a
 headset: speaker output can trigger the voice detection, and Phreak filters
-noise for a close mic. Pauses mid-sentence don't end your turn. The session
+noise for a close mic. Short pauses rarely end your turn. The session
 ends when you press End, hide the panel, switch threads, or stay quiet 15
 minutes.
 

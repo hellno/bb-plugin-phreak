@@ -393,11 +393,12 @@ function PhreakPanel({ threadId }: { threadId: string }) {
       : `${CHIP[shown].label}${view.muted && shown !== "muted" ? ", muted" : ""}.` +
         (view.state === "ended" && view.reason !== null && ROUTINE.test(view.reason) ? ` ${view.reason}` : "");
   const level = useCallback(() => session.current?.level ?? 0, []);
-  // An empty caption shows only as your newest line while you talk or Phreak thinks: still being heard or transcribed.
-  // Once Phreak answers or listens again it hides, so a start that held no words does not linger; late words still fill it in.
-  const hearing = live && (view.talking || view.state === "thinking");
-  const hearingKey = hearing ? view.entries.filter((entry) => entry.type === "caption" && entry.role === "user").at(-1)?.key : undefined;
-  const lines = view.entries.filter((entry) => entry.type === "action" || entry.text !== "" || entry.key === hearingKey);
+  // Your newest line holds its place while empty, until its final caption says no words came. Before the server names
+  // the turn, your speaking line shows only while you talk or Phreak thinks, so a start that never became a turn hides.
+  const newestYours = view.entries.filter((entry) => entry.type === "caption" && entry.role === "user").at(-1)?.key;
+  const holdsPlace = (entry: Entry) =>
+    live && entry.type === "caption" && !entry.final && entry.key === newestYours && (entry.key !== HEARING.key || view.talking || view.state === "thinking");
+  const lines = view.entries.filter((entry) => entry.type === "action" || entry.text !== "" || holdsPlace(entry));
   const empty = lines.length === 0;
   return (
     <div className="flex h-full min-h-0 flex-col text-sm">
@@ -461,7 +462,7 @@ function StartHere({ buttonRef, onStart }: { buttonRef: RefObject<HTMLButtonElem
       <button ref={buttonRef} type="button" aria-label="Start voice session" className={`${BUTTON} ${PRIMARY}`} onClick={onStart}>
         Start
       </button>
-      <p className="text-xs">Best with headphones</p>
+      <p className="text-xs">Best with a headset</p>
     </div>
   );
 }

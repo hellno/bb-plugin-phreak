@@ -184,7 +184,7 @@ class Session {
   private readonly hardLimit = setTimeout(() => this.end("The session reached its 60-minute limit."), MAX_SESSION_MS);
   private readonly silence = setTimeout(() => this.end("Ended after 15 minutes of silence."), SILENCE_MS);
   /** Turn-taking counts, logged at the end without any words, to tell false starts from early stops. */
-  private readonly turns = { starts: 0, commits: 0, wordless: 0, cutOff: 0 };
+  private readonly turns = { starts: 0, commits: 0, wordless: 0, failed: 0, resumed: 0, cutOff: 0 };
 
   constructor(
     private readonly bb: BbPluginApi,
@@ -273,8 +273,11 @@ class Session {
     this.attempt?.close();
     this.lookups.close();
     if (detail) this.bb.log.warn(`session ${this.id} (${this.threadId}): ${reason} ${detail}`);
-    const { starts, commits, wordless, cutOff } = this.turns;
-    this.bb.log.info(`session ${this.id}: ${starts} speech starts, ${commits} turns, ${wordless} without words, ${cutOff} replies cut off`);
+    const { starts, commits, wordless, failed, resumed, cutOff } = this.turns;
+    this.bb.log.info(
+      `session ${this.id}: ${starts} speech starts, ${commits} turns (${wordless} without words, ${failed} failed transcriptions), ` +
+        `${resumed} resumed before a reply, ${cutOff} replies talked over`,
+    );
     this.toBrowser({ type: "ended", reason: detail ? `${reason} ${detail}` : reason });
     this.browser.close(1000);
   }
@@ -301,6 +304,8 @@ class Session {
       this.settle(String(entry.itemId));
     }
     this.unconfirmed.clear();
+    // Items in a report other than a reconnect's flush are replies you talked over.
+    if (message.items.length > 0 && !this.answers.has("played")) this.turns.cutOff++;
     this.answers.get("played")?.(message);
   }
 
@@ -338,7 +343,8 @@ class Session {
         this.silence.refresh();
         a.userSpeaking = true;
         this.turns.starts++;
-        if (a.response && !a.response.interrupted) this.turns.cutOff++;
+        // Speaking again before the reply was heard: the turn likely ended too early.
+        if (a.response && !a.response.audible && !a.response.interrupted) this.turns.resumed++;
         if (a.response) a.response.interrupted = true;
         this.toBrowser({ type: "interrupt" });
         this.status("listening");
@@ -352,6 +358,8 @@ class Session {
       case "conversation.item.input_audio_transcription.delta":
       case "conversation.item.input_audio_transcription.completed":
       case "conversation.item.input_audio_transcription.failed":
+        if (event.type.endsWith(".failed")) this.turns.failed++;
+        else if (event.type.endsWith(".completed") && !event.transcript?.trim()) this.turns.wordless++;
         this.onTranscript(itemId, "User", event.delta ?? event.transcript ?? "", !event.type.endsWith(".delta"));
         break;
       case "response.created":
@@ -403,8 +411,8 @@ class Session {
     if (line.final) return;
     line.text = final ? text.trim() : line.text + text;
     line.final = final;
-    if (final && who === "User" && !line.text) this.turns.wordless++;
-    if (line.text) this.toBrowser({ type: "caption", role: who === "User" ? "user" : "assistant", itemId, text: line.text, final });
+    // A final caption goes out even when empty, so the panel can drop the place it held for words that never came.
+    if (line.text || final) this.toBrowser({ type: "caption", role: who === "User" ? "user" : "assistant", itemId, text: line.text, final });
   }
 
   private line(itemId: string, who: Line["who"]): Line {
