@@ -92,9 +92,11 @@ While a session runs, OpenAI receives your mic audio and what Phreak reads from
 the thread: the recent messages (about 16k tokens at Start), new replies as the
 agent finishes turns, the title, status and question cards, older messages or
 agent work it pages through (commands, file paths, queries, URLs), action
-results, and lookup answers. Nothing goes out before you press Start. Phreak
-keeps no audio or transcript; each lookup leaves an archived hidden thread in
-bb.
+results, and lookup answers. Only sound Phreak's noise gate takes for speech
+leaves your browser; the rest goes out as silence. Nothing goes out before you
+press Start. Phreak keeps no audio or transcript; each lookup leaves an
+archived hidden thread in bb. bb's plugin log keeps, per session, the turn
+counts, your mic's name and settings, and sound levels, never words.
 
 ## Troubleshooting
 
@@ -106,8 +108,12 @@ The panel says how to fix most problems. The common ones:
   the machine running bb, then press Start.
 - **The microphone is blocked:** allow this site to use the microphone in your
   browser.
-- **It starts or stops on its own:** use a headset. After a session,
-  `bb plugin logs phreak` shows its turn counts; include that line in an issue.
+- **It starts or stops on its own:** use a headset, and watch the mic bars.
+  Full bars while you are quiet mean the noise passes as speech. After a
+  session, `bb plugin logs phreak` ends with two lines, the turn counts and a
+  mic report; include both in an issue.
+- **It doesn't hear you:** if the bars stay faint while you talk, speak closer
+  to the mic, or include the mic report line in an issue.
 
 ## Develop
 

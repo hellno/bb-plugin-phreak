@@ -271,7 +271,8 @@ While a session runs, the provider receives your mic audio and everything
 Phreak adds to the conversation: the digest (about 16k tokens), each turn's new
 messages (up to 64k characters), the title, status and question cards,
 `read_thread` pages (commands, file paths, queries, URLs), action results and
-lookup answers. Nothing goes out before Start. Phreak keeps no audio or
+lookup answers; mic audio passes the noise gate first (§4.2), so sound it keeps
+out goes as silence. Nothing goes out before Start. Phreak keeps no audio or
 transcript; each lookup leaves an archived hidden fork in bb.
 
 ## 5. Not in v1
