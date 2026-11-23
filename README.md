@@ -4,27 +4,32 @@ Talk a [bb](https://getbb.app) thread through by voice. Phreak sits in a panel
 beside the chat, answers from the conversation, and sends the agent a message
 when you say "send that".
 
-- **Knows the thread.** It holds the recent messages, the agent's work and any
-  question cards, keeps them current while the agent runs, and pages back
-  further when it needs to.
+- **Knows the thread.** It reads the recent messages and question cards,
+  catches up each time the agent finishes a turn, and reads the agent's work
+  or older messages when it needs to.
 - **Talks with you; the agent does the work.** Anything that needs files, code
   or running something goes to the agent: Phreak sends it when you ask,
   otherwise it offers to. Say "check it yourself" and it looks quietly through
-  a hidden fork of the thread instead. What you say about Phreak, like "don't
-  research", stays with Phreak.
+  a hidden fork of the thread instead; that runs an agent turn on the thread's
+  provider and is read-only by instruction, not by enforcement. What you say
+  about Phreak, like "don't research", stays with Phreak.
 - **Acts in your own words.** "Send that", "tell it now", "stop it", "take that
-  back", "put it in the chat box" or "start a new thread". Each action shows as
-  a card with bb's status and the exact text.
+  back" (while the message is still queued), "put it in the chat box" or
+  "start a new thread". Each action shows as a card with the result and the
+  text.
 - **Keeps you posted.** One short line when the agent finishes, fails or asks
   you something. Talk a question card through and Phreak answers it.
 - **Runs on your ChatGPT plan** through
   [`codex-realtime`](https://github.com/gpambrozio/bb-plugins/tree/main/codex-realtime).
   OpenAI does not document this use of the ChatGPT sign-in, so it may stop
-  working at any time; see [the risk note](SPEC.md#41-provider).
+  working at any time, and nobody has checked whether the ChatGPT or Codex
+  terms allow it; see [the risk note](SPEC.md#41-provider).
 
-**Status:** v0.1. A scripted spoken test passed (a reply, a lookup and a send,
-about 0.8 s to first audio), and its author uses the panel. Not yet tested by
-voice: announcements, unsend, drafts, new threads and question cards. See
+**Status:** v0.1. On 2026-11-22 a scripted spoken test of an earlier build
+passed through the server (a reply, a lookup and a send, about 0.8 s to the
+first audio byte), and its author uses the panel. Not yet tested by voice:
+the routing and voice detection as changed on 2026-11-23, stop, "tell it now",
+reconnects, announcements, unsend, drafts, new threads and question cards. See
 [SPEC.md](SPEC.md).
 
 ## Requirements
@@ -33,7 +38,8 @@ voice: announcements, unsend, drafts, new threads and question cards. See
 - The Codex CLI signed in with **Sign in with ChatGPT** on the machine running
   bb, on a ChatGPT plan that includes Codex. Voice use counts against that plan.
 - The ChatGPT Realtime Connection plugin (`codex-realtime`).
-- A headset.
+
+A headset is recommended: speaker output can trigger the voice detection.
 
 ## Setup
 
@@ -62,8 +68,8 @@ voice: announcements, unsend, drafts, new threads and question cards. See
 Open a thread, open the **Phreak** panel, press **Start**, and talk. Use a
 headset: speaker output can trigger the voice detection, and Phreak filters
 noise for a close mic. Short pauses rarely end your turn. The session
-ends when you press End, hide the panel, switch threads, or stay quiet 15
-minutes.
+ends when you press End, hide the panel, switch threads, stay quiet 15
+minutes, or reach 60 minutes.
 
 - **Shortcut:** <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> (Ctrl on
   macOS too) starts or ends the session, opening the panel if it is hidden.
@@ -79,9 +85,13 @@ minutes.
 
 ## Privacy
 
-While a session runs, OpenAI receives your mic audio, the thread's recent
-messages (about 16k tokens) and the answers of any lookups. Nothing goes out
-before you press Start, and Phreak stores nothing.
+While a session runs, OpenAI receives your mic audio and what Phreak reads from
+the thread: the recent messages (about 16k tokens at Start), new replies as the
+agent finishes turns, the title, status and question cards, older messages or
+agent work it pages through (commands, file paths, queries, URLs), action
+results, and lookup answers. Nothing goes out before you press Start. Phreak
+keeps no audio or transcript; each lookup leaves an archived hidden thread in
+bb.
 
 ## Troubleshooting
 

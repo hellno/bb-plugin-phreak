@@ -1,9 +1,11 @@
 # Phreak spec
 
-Status: plugin v0.1, 2026-11-23. A scripted spoken test through the server
-passed (reply, lookup, send; ~0.8 s to first audio), and the owner uses the
-panel. Not yet tested by voice: announcements, unsend, drafts, new threads and
-answering question cards.
+Status: plugin v0.1, 2026-11-23. On 2026-11-22 a scripted spoken test of an
+earlier build passed through the server (reply, lookup, gated send; ~0.8 s to
+the first audio byte), and the owner uses the panel. Not yet tested by voice:
+the routing and voice detection as changed on 2026-11-23, stop, "tell it now",
+reconnects, announcements, unsend, drafts, new threads and answering question
+cards.
 
 ## 1. What Phreak is
 
@@ -240,8 +242,12 @@ with `local` auth, which works over bb Connect.
 
 ### 4.8 Privacy
 
-While a session runs, the provider receives your mic audio, the digest and the
-fork's answers. Nothing goes out before Start, and nothing is stored.
+While a session runs, the provider receives your mic audio and everything
+Phreak adds to the conversation: the digest (about 16k tokens), each turn's new
+messages (up to 64k characters), the title, status and question cards,
+`read_thread` pages (commands, file paths, queries, URLs), action results and
+lookup answers. Nothing goes out before Start. Phreak keeps no audio or
+transcript; each lookup leaves an archived hidden fork in bb.
 
 ## 5. Not in v1
 

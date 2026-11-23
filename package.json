@@ -15,7 +15,7 @@
   },
   "bb": {
     "name": "Phreak",
-    "description": "Talk a thread through by voice, then say \"send that\". Phreak answers from the chat and hands work to the agent, on your ChatGPT plan.",
+    "description": "Talk a thread through by voice, then say \"send that\". It answers from the chat and hands work to the agent. Voice uses your ChatGPT plan.",
     "branding": {
       "icon": "Mic",
       "experimental_icons": {
