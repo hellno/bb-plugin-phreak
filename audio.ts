@@ -93,7 +93,8 @@ export class SessionAudio {
     this.setMuted(this.muted); // a mute pressed while the permission prompt was open
     const capture = await this.captureNode((samples) => {
       // Muted frames skip the gate, so their silence does not drag its quiet floor down.
-      const frames = this.muted ? [new Float32Array(samples.length)] : this.gate.push(samples, this.strict());
+      // Muting also sends any frames the gate still holds, as the silence they would have become.
+      const frames = this.muted ? [...this.gate.flush(), new Float32Array(samples.length)] : this.gate.push(samples, this.strict());
       this.meter.level = this.muted ? 0 : Math.max(meterLevel(this.gate.levelDb), this.meter.level * 0.8);
       this.meter.passing = !this.muted && this.gate.open;
       for (const frame of frames) onFrame(toPcm16(frame));

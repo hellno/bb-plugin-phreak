@@ -45,7 +45,7 @@ class Session {
   private opened = false;
   private closed = false;
   private thinkingAt: number | null = null; // when your speech ended, until the reply is audible
-  private readonly micReports = setInterval(() => this.sendMicReport(), MIC_REPORT_MS);
+  private micReports: ReturnType<typeof setInterval> | undefined;
 
   // Must run inside the Start click: SessionAudio needs the user gesture. Throws if audio or the socket cannot start.
   constructor(
@@ -77,6 +77,8 @@ class Session {
         if (!running) this.end("The browser kept audio off. Press Start.");
       });
     }, AUDIO_CHECK_MS);
+    // Started last, so a constructor that throws leaves no timer behind.
+    this.micReports = setInterval(() => this.sendMicReport(), MIC_REPORT_MS);
   }
 
   /** The level meter's reading: the mic's loudness from 0 to 1, and whether Phreak hears it as speech. */

@@ -98,19 +98,28 @@ unchecked. Usage counts against the plan.
 - **Noise gate** (`gate.ts`, in the browser, before anything is sent): only
   sustained sound well above the room's quiet floor goes out; everything else
   is sent as silence, one frame out for every frame in, so turn ends and mute
-  keep working. A frame counts as voice when most of it, not one click, is
-  12 dB over the floor (18 dB while Phreak is audible and for 600 ms after).
-  The gate opens on 3 such frames among those held (5 while Phreak is
-  audible). It holds up to 480 ms back while deciding and releases it on open,
-  so the first syllable survives without a standing delay. It stays open
-  480 ms past the last voice, for gaps between words. The open threshold is
-  kept between -50 and -32 dBFS, so near-silence never opens it and close
-  speech always does. The floor learns from closed frames: quick to fall, slow
-  to rise. A sound that holds the gate open for 3 s without a dip becomes the
-  new floor; speech always dips between words. Muted frames skip the gate. In
-  node simulations, steady and rising noise, typing and knocks never open it,
-  and speech opens it with its onset intact, Phreak speaking or not. It has
-  not yet been tested by voice.
+  keep working.
+  - A frame counts as voice when most of it, not one click, is 12 dB over the
+    floor. While Phreak is audible and for 600 ms after, it must be 18 dB over
+    the floor and at least -38 dBFS: talking over Phreak takes a real voice.
+  - The gate opens on 3 such frames among those held (5 while Phreak is
+    audible). It holds up to 480 ms back while deciding and releases it on
+    open, so the first syllable survives without a standing delay. It stays
+    open while most of each frame is voice, and 480 ms past it, for gaps
+    between words. When Phreak starts talking, an open gate closes and the
+    sound must pass the stricter test again.
+  - The open threshold stays between -50 and -32 dBFS (-38 and -32 while
+    Phreak is audible). The floor learns from closed frames, quick to fall and
+    slow to rise, between -62 and -35 dBFS; digital silence (below -90) and
+    muted frames are ignored. A sound that holds the gate open for 3 s without
+    a dip becomes the new floor; speech always dips between words.
+  - In node simulations on synthetic frames, steady and rising noise, typing,
+    knocks, TV-like noise and a voice at -40 dBFS while Phreak talks never
+    open it, and speech opens it with its onset intact, Phreak speaking or
+    not. Known limits: a fan that starts suddenly passes for about 3.5 s
+    before it is learned; a 300 ms creak opens it; a second voice louder than
+    -38 dBFS passes even while Phreak talks; a word shorter than 200 ms may not
+    cut Phreak off. It has not yet been tested by voice.
 - **Meter:** the bars follow the mic. They are faint while the gate keeps the
   sound out and full while Phreak hears speech, so a dead mic (flat) differs
   from filtered noise (faint).

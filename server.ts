@@ -590,7 +590,7 @@ function micLine(report: unknown): string {
   const n = (key: string) => (typeof r[key] === "number" && Number.isFinite(r[key]) ? Math.round(r[key] * 10) / 10 : "?");
   const flag = (key: string) => (r[key] === true ? "on" : r[key] === false ? "off" : "?");
   const device = typeof r.device === "string" ? r.device.replace(/[^\p{L}\p{N} ()._:-]/gu, "").slice(0, 80) : "";
-  const frames = Number(r.frames) || 0;
+  const frames = typeof r.frames === "number" && Number.isFinite(r.frames) ? Math.max(0, Math.round(r.frames)) : 0;
   const openShare = frames ? `${Math.round(((Number(r.openFrames) || 0) / frames) * 100)}%` : "?";
   return (
     `mic "${device || "unnamed"}" echo ${flag("echoCancellation")}, noise ${flag("noiseSuppression")}, gain ${flag("autoGainControl")}; ` +
