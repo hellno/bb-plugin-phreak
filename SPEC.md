@@ -114,15 +114,20 @@ unchecked. Usage counts against the plan.
     Phreak is audible). The floor learns from closed frames, quick to fall and
     slow to rise, between -62 and -35 dBFS; digital silence (below -90) and
     muted frames are ignored, and muting closes the gate. A sound that holds
-    the gate open for 3 s within a 6 dB range becomes the new floor; speech
-    swings more than that with every syllable.
+    the gate open for 3 s while changing less than 2 dB from frame to frame on
+    average becomes the new floor: noise jitters under 1 dB even when it
+    drifts or cycles, and speech swings about 4 dB with every syllable.
   - In node simulations on synthetic frames, steady and rising noise, typing,
     knocks, TV-like noise and a voice at -40 dBFS while Phreak talks never
     open it, and speech opens it with its onset intact, Phreak speaking or
-    not, including 8 s of fluent speech without pauses. Known limits: a fan that starts suddenly passes for about 3.5 s
-    before it is learned; a 300 ms creak opens it; a second voice louder than
-    -38 dBFS passes even while Phreak talks; a word shorter than 200 ms may not
-    cut Phreak off. It has not yet been tested by voice.
+    not, including 8 s of fluent speech without pauses. Known limits: a fan,
+    rumble or cycling noise that starts suddenly passes for about 3 s before
+    it is learned; noise louder than -32 dBFS (speaking volume) passes again
+    every few seconds; a 300 ms creak opens it; a second voice louder than
+    -38 dBFS passes even while Phreak talks, and your own voice softer than
+    that cannot cut Phreak off; a word shorter than 200 ms may not either. The
+    first mic report's loudest passed level shows whether -38 suits a real
+    headset. It has not yet been tested by voice.
 - **Meter:** the bars follow the mic. They are faint while the gate keeps the
   sound out and full while Phreak hears speech, so a dead mic (flat) differs
   from filtered noise (faint).

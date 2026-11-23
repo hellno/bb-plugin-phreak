@@ -14,7 +14,7 @@ const QUIET_FRAMES = 3; // ~120 ms below the candidate level ends a held sound; 
 const HYSTERESIS_DB = 6; // stays open down to this much below the open threshold
 const HANG_FRAMES = 12; // ~480 ms open after the level drops, for gaps between words
 const STEADY_FRAMES = 75; // ~3 s open at a near-constant level: steady noise such as a fan
-const STEADY_RANGE_DB = 6; // a fan stays within this; speech swings more with every syllable
+const STEADY_STEP_DB = 2; // mean change from frame to frame: noise jitters under 1 dB, even when it drifts or cycles; speech swings about 4
 const MIN_OPEN_DB = -50; // never opens on near-silence
 const STRICT_MIN_OPEN_DB = -38; // talking over Phreak takes a voice at least this loud, so a voice across the room does not cut it off
 const MAX_OPEN_DB = -32; // sustained close-mic speech always opens, however noisy the room
@@ -48,9 +48,18 @@ export function frameDb(frame: Float32Array): number {
 
 /** The level most of the frame holds: the second quietest of its four quarters. A key click fills one quarter. */
 export function sustainedDb(frame: Float32Array): number {
+  return [...quarterDbs(frame)].sort((a, b) => a - b)[1];
+}
+
+function quarterDbs(frame: Float32Array): number[] {
   const quarter = Math.floor(frame.length / 4);
-  const levels = [0, 1, 2, 3].map((i) => energyDb(frame, i * quarter, quarter)).sort((a, b) => a - b);
-  return levels[1];
+  return [0, 1, 2, 3].map((i) => energyDb(frame, i * quarter, quarter));
+}
+
+function meanStep(levels: number[]): number {
+  let sum = 0;
+  for (let i = 1; i < levels.length; i++) sum += Math.abs(levels[i] - levels[i - 1]);
+  return sum / (levels.length - 1);
 }
 
 function energyDb(frame: Float32Array, start: number, length: number): number {
@@ -87,7 +96,9 @@ export class NoiseGate {
   /** Takes one frame; returns the frames to send now, each the frame itself or silence of its length. */
   push(frame: Float32Array, strict: boolean): Float32Array[] {
     const db = (this.levelDb = frameDb(frame));
-    const voice = sustainedDb(frame); // what most of the frame holds, so clicks count as quiet
+    const quarters = quarterDbs(frame);
+    const voice = [...quarters].sort((a, b) => a - b)[1]; // what most of the frame holds, so clicks count as quiet
+    const tail = Math.min(quarters[2], quarters[3]); // a sound that starts late in the frame
     const stats = this.stats;
     stats.frames++;
     const becameStrict = strict && !this.wasStrict;
@@ -110,7 +121,7 @@ export class NoiseGate {
       if (this.steady.length > STEADY_FRAMES) this.steady.shift();
       if (voice >= openAt - HYSTERESIS_DB) {
         this.hang = HANG_FRAMES;
-        if (this.steady.length === STEADY_FRAMES && Math.max(...this.steady) - Math.min(...this.steady) < STEADY_RANGE_DB) {
+        if (this.steady.length === STEADY_FRAMES && meanStep(this.steady) < STEADY_STEP_DB) {
           // Open 3 s at a near-constant level: steady noise, not speech. It becomes the floor.
           this.floor = clamp(voice, FLOOR_MIN_DB, FLOOR_MAX_DB);
           this.close();
@@ -126,7 +137,9 @@ export class NoiseGate {
 
     if (db < openAt) this.learn(db);
     // Below the candidate level a frame is quiet; that level never exceeds the open level, so no frame is both.
-    const quiet = voice < Math.min(Math.max(this.floor + CANDIDATE_DB, MIN_OPEN_DB - CANDIDATE_DB), openAt);
+    // A frame whose second half is all sound is held anyway, so a sharp onset late in it is kept.
+    const candidateAt = Math.min(Math.max(this.floor + CANDIDATE_DB, MIN_OPEN_DB - CANDIDATE_DB), openAt);
+    const quiet = voice < candidateAt && tail < candidateAt;
     if (quiet && this.held.length === 0) return [this.silenced({ frame, db, loud: false })];
     // Held in order, so frames come out as they went in.
     this.held.push({ frame: frame.slice(), db, loud: voice >= openAt });
