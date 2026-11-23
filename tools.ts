@@ -1,6 +1,6 @@
 // The thread digest and its updates, the Realtime function tools and every bb
-// call behind them. Lookups beyond the chat go to a fresh hidden fork of the
-// thread, so bb's own agent does the reading. Actions only ever take the
+// call behind them. A lookup the user asks Phreak itself to make goes to a fresh
+// hidden fork of the thread, so bb's own agent does the reading. Actions only ever take the
 // session's threadId; the model never picks the thread.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { ActionResult, ActionTool } from "./protocol";
@@ -46,13 +46,13 @@ export const TOOLS = [
   ),
   tool(
     "look_up",
-    "Check something yourself without involving the thread's agent: a hidden read-only helper with this thread's context reads files, git or other threads. Only when the user asks you to check it yourself; other work goes to the agent with send_to_chat. The answer can take a minute or more.",
+    "Check something yourself without involving the thread's agent: a hidden read-only helper with this thread's context reads files, git or other threads. Only when the user wants you, not the agent, to check. The answer can take a minute or more.",
     { question: { type: "string", description: "A complete, self-contained question." } },
     ["question"],
   ),
   tool(
     "send_to_chat",
-    "Send a message to this thread's agent: the request or question itself, written as the user would type it, never the user's instructions to you. It queues while the agent is working unless now is true.",
+    "Send a message to this thread's agent: the request or question itself, written as the user would type it, never what the user told you about your own behavior. It queues while the agent is working unless now is true.",
     {
       text: { type: "string", description: "The exact message to send." },
       now: { type: "boolean", description: "Deliver it into the agent's running turn instead of queueing it." },

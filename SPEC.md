@@ -17,13 +17,14 @@ you decided, and anything that needs work goes to the thread's agent. Nothing
 reaches the agent until you ask for it.
 
 A typical session: the agent has laid out options A to D. You press Start and
-ask "what does B cost us?"; Phreak answers from the transcript. You ask "did it
-touch the auth module?"; that needs a look at the code, so Phreak asks whether
-to hand it to the agent. You settle on "A plus D, skip the migration", say
-"okay, send that", and Phreak sends it, says in a few words what it sent, and
-tells you what bb reported. While the agent works you can ask "is it done?", say "tell it now to
-add tests too" or "stop it", or talk through a question it asked and say what
-you picked.
+ask "what does B cost us, and did it touch the auth module?"; Phreak answers
+from the transcript and the agent's work. You ask "would D break the migration
+tests?"; that needs the code run, so Phreak offers to hand it to the agent. You
+settle on "A plus D, skip the migration", say "okay, send that", and Phreak
+sends it, says in a few words what it sent, and tells you what bb reported.
+While the agent works you can ask "is it done?", say "tell it now to add tests
+too" or "stop it", or talk through a question it asked and say what you
+picked.
 
 ## 2. Why another voice plugin
 
@@ -38,7 +39,7 @@ bb's side chat is the closest in spirit but text only.
 | --- | --- |
 | Audio provider | Codex (ChatGPT plan), through the installed `codex-realtime` plugin. |
 | Abilities | Read the chat, send, steer, unsend, draft into the chat box, stop, answer the agent's question cards, start a new thread, and say when the thread finishes, fails or asks. Look things up through a hidden fork of the thread only when you ask Phreak itself to check. |
-| Routing (2026-11-23) | Phreak talks, the agent works. Work goes to the agent: sent when you ask, offered in a few words when Phreak judges it needs work. What you say about Phreak ("don't research", "be brief") is for Phreak and never relayed; "send it back" sends the request under discussion. |
+| Routing (2026-11-23) | Phreak talks, the agent works. What the chat and its work rows can't answer goes to the agent: sent when you ask for the work, offered in a few words when Phreak judges it needs work. What you say about Phreak ("don't research", "be brief") is for Phreak and never relayed; "send it back" sends the request under discussion. |
 | Sending | Immediately when you ask. No confirmation step. |
 | Authorization | The voice model decides from your words, in any phrasing. No phrase lists or other hardcoded gates. |
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |

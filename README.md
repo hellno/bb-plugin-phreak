@@ -8,11 +8,12 @@ into the thread.
 - **Discusses, doesn't relay.** The voice model holds the thread's recent
   messages and keeps them current, and pages back through older messages and
   agent work on demand.
-- **Talks with you; the agent does the work.** Phreak answers from the chat.
-  Anything that needs work, like checking code or running something, it hands
-  to the agent: it sends when you ask, or asks first. Say "check it yourself"
-  and it looks it up quietly through a hidden fork of the thread instead. What
-  you say about Phreak, like "don't research", stays with Phreak.
+- **Talks with you; the agent does the work.** Phreak answers from the chat
+  and the agent's work. Anything that needs more, like checking code or running
+  something, goes to the agent: Phreak sends it when you ask, otherwise it
+  offers to. Say "check it yourself" and it looks it up quietly through a
+  hidden fork of the thread instead. What you say about Phreak, like "don't
+  research", stays with Phreak.
 - **Acts when you ask, in your own words.** "Send that", "yeah, push it over"
   or "pass that on" sends a message composed from what you decided; "tell it
   now" delivers it into the running turn; "stop it" stops the agent. The panel
