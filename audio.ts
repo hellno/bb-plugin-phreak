@@ -60,6 +60,11 @@ export class SessionAudio {
     this.ctx.resume().catch(() => undefined);
   }
 
+  /** Whether the browser let audio start; false while it holds the context suspended. */
+  get running(): boolean {
+    return this.ctx.state === "running";
+  }
+
   /** Muted, the track sends silence: frames keep flowing, so voice detection hears your turn end. */
   setMuted(muted: boolean): void {
     this.muted = muted;

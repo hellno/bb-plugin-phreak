@@ -1,7 +1,7 @@
 // Phreak's panel for the thread it sits beside: Start/End and Mute on one row
 // with a state chip, live captions, and a card per action. Drafts go into the
 // thread's composer. Ctrl+Shift+Space opens the panel, then starts or ends.
-import { useCallback, useEffect, useReducer, useRef, type UIEvent } from "react";
+import { useCallback, useEffect, useReducer, useRef, type MouseEvent, type UIEvent } from "react";
 import {
   Markdown,
   definePluginApp,
@@ -26,6 +26,8 @@ type PanelEvent =
   | { type: "mute"; muted: boolean }
   | { type: "playing"; playing: boolean }
   | { type: "latency"; ms: number };
+
+const AUDIO_CHECK_MS = 2_000;
 
 // Same-origin route, as in Voice Mode's session.ts (steveafrost/bb-plugin-voice-mode, MIT).
 function sessionUrl(threadId: string): string {
@@ -68,7 +70,11 @@ class Session {
         this.level = Math.max(loudness(frame), this.level * 0.8);
         if (this.ws.readyState === WebSocket.OPEN) this.ws.send(frame);
       })
-      .catch((error: unknown) => this.end(`Microphone unavailable: ${errorText(error)}`));
+      .catch((error: unknown) => this.end(`Microphone unavailable: ${error instanceof Error ? `${error.name}: ` : ""}${errorText(error)}`));
+    // A browser may keep audio off when no click or key press started it (Safari after the palette, say).
+    setTimeout(() => {
+      if (!this.closed && !this.audio.running) this.end("The browser kept audio off. Press Start.");
+    }, AUDIO_CHECK_MS);
   }
 
   mute(muted: boolean): void {
@@ -177,8 +183,11 @@ function reduce(view: View, event: PanelEvent): View {
       return { ...view, latencyMs: event.ms };
     case "interrupt":
       return { ...view, talking: true };
-    case "status":
-      return { ...view, state: event.state, talking: view.talking && event.state === "listening" };
+    case "status": {
+      // You started speaking (an interrupt, then listening; a reconnect's interrupt is followed by reconnecting).
+      const talking = view.talking && event.state === "listening";
+      return { ...view, state: event.state, talking, entries: talking ? withHearing(view.entries) : view.entries };
+    }
     case "lookups":
       return { ...view, lookups: event.running };
     case "error":
@@ -192,22 +201,33 @@ function reduce(view: View, event: PanelEvent): View {
   }
 }
 
+/** Your line while you speak, before the server has an item for it; your next caption takes its place. */
+const HEARING: Entry = { type: "caption", role: "user", itemId: "", text: "", final: false, key: "c:hearing" };
+
+/** Puts your speaking line last, moving one left behind by speech that never became an utterance. */
+function withHearing(entries: Entry[]): Entry[] {
+  return entries.at(-1)?.key === HEARING.key ? entries : [...entries.filter((entry) => entry.key !== HEARING.key), HEARING];
+}
+
 // Keyed by item, so an empty caption sent at commit holds the utterance's place until its text arrives.
 function upsertCaption(entries: Entry[], caption: CaptionMessage): Entry[] {
   const next: Entry = { ...caption, key: `c:${caption.itemId}` };
-  const index = entries.findIndex((entry) => entry.key === next.key);
+  let index = entries.findIndex((entry) => entry.key === next.key);
+  if (index === -1 && caption.role === "user") index = entries.findIndex((entry) => entry.key === HEARING.key);
   return index === -1 ? [...entries, next] : entries.map((entry, i) => (i === index ? next : entry));
 }
 
 const TAB = { id: "phreak", context: { kind: "thread" }, availability: "action" } as const;
 // Voice Mode's Ctrl+Shift chord on Space, which bb and Voice Mode leave free. Ctrl on macOS too.
 const SHORTCUT = { key: "Space", control: true, shift: true };
-const SHORTCUT_LABEL = /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌃⇧Space" : "Ctrl+Shift+Space";
+const PENDING_START_MS = 3_000;
 
 /** The mounted panels by thread, so the shortcut can reach them. */
 const panels = new Map<string, { visible: boolean; toggle: () => void }>();
-/** The thread whose panel the shortcut opened: its Start button takes focus once it shows. */
-let focusStartFor: string | null = null;
+/** A shortcut press that opened a hidden panel: the panel starts once it shows, if that is soon. */
+let pendingStart: { threadId: string; at: number } | null = null;
+/** When the shortcut last toggled: a browser may also click the focused button on the Space key's release. */
+let shortcutAt = 0;
 
 /** What the chip shows: the session's state, with muted and lookups split out of listening. */
 type Shown = SessionState | "muted" | "lookup" | "ended";
@@ -236,20 +256,21 @@ const PROBLEMS = new Set(["refused", "failed", "unknown"]);
 const ROUTINE = /^(You ended|The Phreak panel was|The session reached|Ended after|A new(er)? Phreak session started|Phreak was reloaded|The conversation outgrew)/;
 /** The fix for each problem you can fix, matched on the server's or the browser's message. */
 const FIXES: [RegExp, string][] = [
-  [/not allowed to use the ChatGPT sign-in/i, "Add `phreak` to codex-realtime's allowed plugins (Settings → Plugins → ChatGPT Realtime Connection), then press Start."],
-  [/codex-realtime: .*(unknown plugin|not found|not running|not enabled|no rpc method)/i, "Phreak's voice comes from the ChatGPT Realtime Connection plugin. Install it with `bb plugin install codex-realtime`, then press Start."],
+  [/not allowed to use the ChatGPT sign-in/i, "Allow Phreak in ChatGPT Realtime Connection's settings: add `phreak` to **Plugins that may use the sign-in**, then press Start."],
+  [/codex-realtime: .*unknown plugin/i, "Phreak's voice comes from the ChatGPT Realtime Connection plugin. Install it with `bb plugin install codex-realtime`, then press Start."],
+  [/codex-realtime: .*(not running|not enabled|disabled|no rpc method)/i, "ChatGPT Realtime Connection isn't running. Turn it on with `bb plugin enable codex-realtime`, or check `bb plugin list`, then press Start."],
   [/no Codex login|no ChatGPT sign-in/i, "Sign in to Codex with ChatGPT on the machine running bb: run `codex login`, then press Start."],
   [/expired|OpenAI refused or did not answer/i, "Renew the ChatGPT sign-in: run `codex` once on the machine running bb, then press Start."],
-  [/Microphone unavailable: .*(NotAllowed|Permission|denied)/i, "Allow this site to use your microphone in the browser, then press Start."],
-  [/Microphone unavailable: .*(NotFound|not found)/i, "Connect a microphone, then press Start."],
+  [/Microphone unavailable: .*(NotAllowedError|SecurityError|denied|not allowed)/i, "Allow this site to use your microphone in the browser, then press Start."],
+  [/Microphone unavailable: .*(NotFoundError|OverconstrainedError|not found|can ?not be found)/i, "Connect a microphone, then press Start."],
   [/not served over https or localhost/i, "The microphone needs a secure page: open bb over https or on localhost."],
   [/Could not reach the Phreak server|connection to Phreak closed/i, "Check that Phreak is running with `bb plugin list`, then press Start."],
+  [/closed the session during setup|connection dropped/i, "The voice connection dropped. Press Start to reconnect."],
 ];
 
 const BUTTON =
   "inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 const PRIMARY = "bg-foreground text-background hover:bg-foreground/90";
-const DESTRUCTIVE = "bg-destructive text-destructive-foreground hover:bg-destructive/90";
 const OUTLINE = "border border-border bg-transparent text-foreground hover:bg-state-hover";
 const MUTED = "border border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/15";
 
@@ -264,7 +285,6 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   const composer = useComposer();
   const settings = useSettings();
   const session = useRef<Session | null>(null);
-  const startButton = useRef<HTMLButtonElement>(null);
   const live = view.state !== null && view.state !== "ended";
   useEffect(() => {
     if (!live) session.current = null;
@@ -284,6 +304,7 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   const scroller = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLOListElement>(null);
   const pinned = useRef(true); // following the newest line, until you scroll up
+  const lastTop = useRef(0);
 
   const start = () => {
     try {
@@ -295,6 +316,10 @@ function PhreakPanel({ threadId }: { threadId: string }) {
     dispatch({ type: "start" });
   };
   const toggle = live ? () => end("You ended the session.") : start;
+  const onToggleClick = (event: MouseEvent) => {
+    if (event.detail === 0 && performance.now() - shortcutAt < 500) return; // the shortcut's own key release
+    toggle();
+  };
 
   const toggleMute = () => {
     session.current?.mute(!view.muted);
@@ -316,12 +341,13 @@ function PhreakPanel({ threadId }: { threadId: string }) {
     };
   });
   useEffect(() => {
-    if (!visible || focusStartFor !== threadId) return;
-    focusStartFor = null;
-    startButton.current?.focus();
+    if (!visible || pendingStart?.threadId !== threadId) return;
+    const fresh = performance.now() - pendingStart.at < PENDING_START_MS;
+    pendingStart = null;
+    if (fresh && !live) start();
   }, [visible, threadId]);
 
-  // Keeps the newest line in view as lines arrive and captions grow, unless you scrolled up to read.
+  // Keeps the newest line in view as lines arrive, captions grow or the box shrinks, unless you scrolled up to read.
   useEffect(() => {
     const box = scroller.current;
     if (!box || !list.current) return;
@@ -329,11 +355,14 @@ function PhreakPanel({ threadId }: { threadId: string }) {
       if (pinned.current) box.scrollTop = box.scrollHeight;
     });
     observer.observe(list.current);
+    observer.observe(box);
     return () => observer.disconnect();
   }, []);
   const onScroll = (event: UIEvent<HTMLDivElement>) => {
     const box = event.currentTarget;
-    pinned.current = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    if (box.scrollHeight - box.scrollTop - box.clientHeight < 40) pinned.current = true;
+    else if (box.scrollTop < lastTop.current) pinned.current = false; // only your own scroll moves it up
+    lastTop.current = box.scrollTop;
   };
 
   // The server says "listening" once it has sent the audio; playback can lag behind.
@@ -347,52 +376,82 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   }, [cue]);
 
   const shown: Shown | null = state === "listening" ? (view.muted ? "muted" : view.lookups > 0 && !view.talking ? "lookup" : "listening") : state;
-  const quietReason = view.state === "ended" && view.reason !== null && ROUTINE.test(view.reason) ? ` ${view.reason}` : "";
+  const announced =
+    shown === null
+      ? ""
+      : `${CHIP[shown].label}${view.muted && shown !== "muted" ? ", muted" : ""}.` +
+        (view.state === "ended" && view.reason !== null && ROUTINE.test(view.reason) ? ` ${view.reason}` : "");
   const level = useCallback(() => session.current?.level ?? 0, []);
+  // Your newest line, the only empty one worth showing: it is still being heard or transcribed.
+  const hearingKey = live ? view.entries.filter((entry) => entry.type === "caption" && entry.role === "user").at(-1)?.key : undefined;
+  const empty = view.entries.length === 0;
   return (
     <div className="flex h-full min-h-0 flex-col text-sm">
-      <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-        <button
-          ref={startButton}
-          type="button"
-          aria-label={live ? "End voice session" : "Start voice session"}
-          aria-keyshortcuts="Control+Shift+Space"
-          className={`${BUTTON} ${live ? DESTRUCTIVE : PRIMARY}`}
-          onClick={toggle}
-        >
-          <Icon name={live ? "Square" : "Mic"} aria-hidden className="size-4" />
-          {live ? "End" : "Start"}
-        </button>
-        {live ? (
-          <button type="button" className={`${BUTTON} ${view.muted ? MUTED : OUTLINE}`} onClick={toggleMute}>
-            <Icon name={view.muted ? "phreak/mic-off" : "Mic"} fallback="Mic" aria-hidden className="size-4" />
-            {view.muted ? "Unmute" : "Mute"}
+      {/* Screen readers hear state changes and quiet endings; captions stay silent. */}
+      <span role="status" className="sr-only">
+        {announced}
+      </span>
+      {live || !empty ? (
+        <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+          <button type="button" aria-label={live ? "End voice session" : "Start voice session"} className={`${BUTTON} ${live ? OUTLINE : PRIMARY}`} onClick={onToggleClick}>
+            <Icon name={live ? "Square" : "Mic"} aria-hidden className={live ? "size-3.5 text-destructive" : "size-4"} />
+            {live ? "End" : "Start"}
           </button>
-        ) : null}
-        <div className="ml-auto flex items-center gap-2">
-          {live ? <LevelMeter level={level} /> : null}
-          {shown === null ? null : <StateChip shown={shown} />}
-          {settings.values?.showLatency === true && view.latencyMs !== null ? (
-            <span className="text-xs tabular-nums text-muted-foreground" title="From the end of your speech to the first audible reply">
-              {view.latencyMs} ms
-            </span>
+          {live ? (
+            <button type="button" className={`${BUTTON} ${view.muted ? MUTED : OUTLINE}`} onClick={toggleMute}>
+              <Icon name={view.muted ? "phreak/mic-off" : "Mic"} fallback="Mic" aria-hidden className="size-4" />
+              {view.muted ? "Unmute" : "Mute"}
+            </button>
           ) : null}
-        </div>
-        {/* Screen readers hear state changes and quiet endings; captions stay silent. */}
-        <span role="status" className="sr-only">
-          {shown === null ? "" : `${CHIP[shown].label}.${quietReason}`}
-        </span>
-      </header>
+          <div className="ml-auto flex items-center gap-2">
+            {live ? <LevelMeter level={level} /> : null}
+            {shown === null ? null : <StateChip shown={shown} />}
+            {settings.values?.showLatency === true && view.latencyMs !== null ? (
+              <span className="text-xs tabular-nums text-muted-foreground" title="From the end of your speech to the first audible reply">
+                {view.latencyMs} ms
+              </span>
+            ) : null}
+          </div>
+        </header>
+      ) : null}
       {view.error === null ? null : <Notice message={view.error} />}
       {view.state === "ended" && view.reason !== null ? <Notice message={view.reason} /> : null}
       <div ref={scroller} onScroll={onScroll} className="relative min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {view.state === null ? <IdleHint /> : null}
+        {empty && !live ? <StartHere onStart={onToggleClick} /> : null}
+        {empty && live && shown !== null ? <Waiting level={level} label={CHIP[shown].label} /> : null}
         <ol ref={list} aria-label="Conversation" className="flex flex-col gap-5">
           {view.entries.map((entry) =>
-            entry.type === "action" ? <ActionCard key={entry.key} action={entry} /> : <Caption key={entry.key} caption={entry} />,
+            entry.type === "action" ? (
+              <ActionCard key={entry.key} action={entry} />
+            ) : (
+              <Caption key={entry.key} caption={entry} hearing={entry.key === hearingKey} />
+            ),
           )}
         </ol>
       </div>
+    </div>
+  );
+}
+
+/** Before the first session, or after one that said nothing: the one thing to do. */
+function StartHere({ onStart }: { onStart: (event: MouseEvent) => void }) {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-muted-foreground">
+      <Icon name="Mic" aria-hidden className="size-6" />
+      <button type="button" aria-label="Start voice session" className={`${BUTTON} ${PRIMARY}`} onClick={onStart}>
+        Start
+      </button>
+      <p className="text-xs">Best with headphones</p>
+    </div>
+  );
+}
+
+/** A live session before anyone spoke: the mic level, big, so you can see it hears you. */
+function Waiting({ level, label }: { level: () => number; label: string }) {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+      <LevelMeter level={level} large />
+      <p className="text-xs">{label}</p>
     </div>
   );
 }
@@ -411,8 +470,8 @@ function StateChip({ shown }: { shown: Shown }) {
 
 const BAR_SHAPE = [0.55, 1, 0.75, 0.4];
 
-/** Four thin bars that follow the mic: they move while it hears you and lie flat while silent or muted. */
-function LevelMeter({ level }: { level: () => number }) {
+/** Thin bars that follow the mic: they move while it hears you and lie flat while silent or muted. */
+function LevelMeter({ level, large = false }: { level: () => number; large?: boolean }) {
   const bars = useRef<(HTMLSpanElement | null)[]>([]);
   useEffect(() => {
     let frame = requestAnimationFrame(function draw() {
@@ -423,7 +482,7 @@ function LevelMeter({ level }: { level: () => number }) {
     return () => cancelAnimationFrame(frame);
   }, [level]);
   return (
-    <span aria-hidden title="Microphone level" className="flex h-4 items-center gap-0.5">
+    <span aria-hidden title="Microphone level" className={`flex items-center motion-reduce:hidden ${large ? "h-10 gap-1.5" : "h-4 gap-0.5"}`}>
       {BAR_SHAPE.map((_, i) => (
         <span
           key={i}
@@ -431,36 +490,24 @@ function LevelMeter({ level }: { level: () => number }) {
             bars.current[i] = bar;
           }}
           style={{ transform: "scaleY(0.15)" }}
-          className="h-full w-0.5 rounded-full bg-muted-foreground"
+          className={`h-full rounded-full bg-muted-foreground ${large ? "w-1" : "w-0.5"}`}
         />
       ))}
     </span>
   );
 }
 
-function IdleHint() {
-  return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
-      <Icon name="Mic" aria-hidden className="size-5" />
-      <p className="leading-relaxed">Press Start to talk this thread through.</p>
-      <p className="text-xs leading-relaxed">
-        Shortcut <kbd className="rounded border border-border px-1.5 py-0.5 font-sans">{SHORTCUT_LABEL}</kbd>
-        <br />
-        Wear headphones so Phreak doesn't hear itself.
-      </p>
-    </div>
-  );
-}
-
 /** One spoken turn, written in place: grey while it is still being heard, normal once final. */
-function Caption({ caption }: { caption: CaptionMessage }) {
-  if (caption.text === "" && caption.final) return null;
+function Caption({ caption, hearing }: { caption: CaptionMessage; hearing: boolean }) {
+  if (caption.text === "" && !hearing) return null;
   return (
     <li>
       <div className="mb-1 text-xs font-medium text-muted-foreground">{caption.role === "user" ? "You" : "Phreak"}</div>
       {caption.text === "" ? (
-        // Holds the place of words not yet transcribed, so the lines after it do not move.
-        <p aria-hidden className="text-muted-foreground">…</p>
+        // Your words arrive once you pause; until then this holds their place, so later lines do not move.
+        <p aria-hidden className="animate-pulse text-muted-foreground motion-reduce:animate-none">
+          …
+        </p>
       ) : (
         <p className={`whitespace-pre-wrap break-words leading-relaxed ${caption.final ? "text-foreground" : "text-muted-foreground"}`}>{caption.text}</p>
       )}
@@ -500,30 +547,19 @@ function Notice({ message }: { message: string }) {
     <div role="alert" className="mx-4 mt-3 flex gap-2 rounded-lg border border-border px-3 py-2.5">
       <Icon name="AlertCircle" aria-hidden className="mt-0.5 size-4 shrink-0 text-destructive" />
       <div className="min-w-0 flex-1 break-words">
-        <p className="leading-relaxed text-foreground">
-          <WithCode text={fix ?? message} />
-        </p>
         {fix ? (
-          <details className="mt-1 text-xs text-muted-foreground">
-            <summary className="cursor-pointer select-none">Details</summary>
-            <p className="mt-1">{message}</p>
-          </details>
-        ) : null}
+          <>
+            <Markdown content={fix} />
+            <details className="mt-1 text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none">Details</summary>
+              <p className="mt-1">{message}</p>
+            </details>
+          </>
+        ) : (
+          <p className="leading-relaxed text-foreground">{message}</p>
+        )}
       </div>
     </div>
-  );
-}
-
-/** Text with `code` spans, as the fixes are written. */
-function WithCode({ text }: { text: string }) {
-  return text.split("`").map((part, i) =>
-    i % 2 === 1 ? (
-      <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
-        {part}
-      </code>
-    ) : (
-      part
-    ),
   );
 }
 
@@ -554,12 +590,12 @@ export default definePluginApp((app) => {
     isAvailable: ({ threadId }) => threadId !== null,
     run({ threadId, experimental_panel }) {
       if (threadId === null) return;
-      // A session needs its panel on screen, and audio may only start inside a key press or click.
-      // So a press while the panel is hidden opens it and focuses Start; the next press starts.
+      shortcutAt = performance.now();
       const panel = panels.get(threadId);
       if (panel?.visible) return panel.toggle();
-      focusStartFor = threadId;
-      experimental_panel.openTab({ tab: TAB, title: "Phreak" });
+      // A session needs its panel on screen: open it, and it starts once it shows.
+      pendingStart = { threadId, at: shortcutAt };
+      if (!experimental_panel.openTab({ tab: TAB, title: "Phreak" })) pendingStart = null;
     },
   });
 });

@@ -182,24 +182,29 @@ from one.
 
 A "Phreak" thread tab (`app.slots.experimental_tab`).
 
-- **Top row:** Start, or a red End with a square; Mute, which turns red and
-  reads Unmute with a crossed-out mic while muted; a four-bar mic level meter;
-  and a state chip, an icon and a word: Connecting, Listening, Muted, Looking
-  up, Thinking, Speaking, Reconnecting or Ended. The latency follows the chip
-  only when the `showLatency` setting is on (off by default).
-- **Screen readers** hear the chip's word and routine endings through a
-  status region. Captions stay silent.
-- **Captions** update in place: grey until final. An empty caption holds its
-  place, so later lines do not move. The list follows the newest line unless
-  you scroll up.
+- **Empty panel:** a mic and one Start button. Once live and before anyone
+  speaks, a large mic level meter and the state.
+- **Top row**, once there is a session or a transcript: Start, or an outlined
+  End with a red square; Mute, which turns red and reads Unmute with a
+  crossed-out mic while muted; a four-bar mic level meter (hidden under reduced
+  motion); and a state chip, an icon and a word: Connecting, Listening, Muted,
+  Looking up, Thinking, Speaking, Reconnecting or Ended. The latency follows
+  the chip only when the `showLatency` setting is on (off by default).
+- **Screen readers** hear the chip's word (with "muted" while muted) and
+  routine endings through a status region. Captions stay silent.
+- **Captions** update in place: grey until final. Your line appears as "You …"
+  when speech starts (`interrupt` then `listening`). Your words fill it in after
+  you pause: the Realtime API transcribes a turn once it is committed. Only
+  your newest empty line shows, so a failed transcription disappears at your
+  next turn. The list follows the newest line unless you scroll up.
 - **Action cards** show bb's status, the detail, and the text through bb's
   `Markdown`, as the chat shows it.
 - **Problems** lead with the fix (for example, add `phreak` to
   codex-realtime's allowed plugins), with the message under Details.
 - **Shortcut:** Ctrl+Shift+Space (`app.commands`, rebindable) starts or ends
-  the session while the panel shows. While the panel is hidden, it opens the
-  panel and focuses Start: a session needs its panel on screen, and audio must
-  start inside a key press.
+  the session. While the panel is hidden, it opens the panel, which starts
+  once it shows (within 3 s). If the browser keeps audio off because no key
+  press or click started it, the session ends after 2 s and asks for Start.
 - **Icons:** bb's icon set, plus two declared in the manifest
   (`phreak/mic-off`, `phreak/audio-lines`).
 
@@ -229,7 +234,7 @@ tests.
 | OpenAI stops accepting the Codex sign-in for Realtime. | The provider is a plugin contract; another `realtimeConnection` plugin can replace it. |
 | `experimental_` SDK APIs change. | The SDK is pinned; re-check on each bb update. |
 | The model writes the wrong message, or text planted in the chat or a file steers it into an action you did not ask for. The owner chose natural phrasing over hardcoded checks. | Actions are bound to the session's thread, the panel shows every one, and "stop it" stops the turn. |
-| Latency through bb Connect. | Shown on the panel; WebRTC is the fallback plan. |
+| Latency through bb Connect. | Shown on the panel with the `showLatency` setting; WebRTC is the fallback plan. |
 
 ## 7. Credits
 
