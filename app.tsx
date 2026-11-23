@@ -166,7 +166,7 @@ interface View {
   latencyMs: number | null;
   playing: boolean;
   talking: boolean; // from an interrupt (you started speaking) to the next status other than listening
-  lookups: number; // ask_agent lookups in flight
+  lookups: number; // look_up lookups in flight
   muted: boolean;
   entries: Entry[]; // the session's whole transcript: sessions are capped at 60 minutes
   error: string | null;

@@ -8,9 +8,11 @@ into the thread.
 - **Discusses, doesn't relay.** The voice model holds the thread's recent
   messages and keeps them current, and pages back through older messages and
   agent work on demand.
-- **Looks things up through bb's own agents.** Questions about files, git or
-  other threads go to a fresh hidden fork of the thread, the way side chat
-  works, and the answer is spoken when it arrives.
+- **Talks with you; the agent does the work.** Phreak answers from the chat.
+  Anything that needs work, like checking code or running something, it hands
+  to the agent: it sends when you ask, or asks first. Say "check it yourself"
+  and it looks it up quietly through a hidden fork of the thread instead. What
+  you say about Phreak, like "don't research", stays with Phreak.
 - **Acts when you ask, in your own words.** "Send that", "yeah, push it over"
   or "pass that on" sends a message composed from what you decided; "tell it
   now" delivers it into the running turn; "stop it" stops the agent. The panel
