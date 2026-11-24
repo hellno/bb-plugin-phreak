@@ -29,10 +29,11 @@ when you say "send that".
 passed through the server (a reply, a lookup and a send, about 0.8 s to the
 first audio byte). On 2026-11-23 its author's first voice session showed room
 noise taken for speech and cutting replies off. With the noise gate added
-since, the author's sessions on 2026-11-24 (AirPods) went well: no false
-starts, and the gate kept out sounds up to -25 dBFS. Not separately confirmed
-by voice: reconnects, unsend, drafts, new threads and question cards. See
-[SPEC.md](SPEC.md).
+since, the author's sessions on 2026-11-24 (AirPods, about 4 minutes) went
+well: talking the thread through and sending, with no false starts, and the
+gate kept out sounds up to -25 dBFS. Not separately confirmed by voice: stop,
+"tell it now", announcements, reconnects, unsend, drafts, new threads and
+question cards. See [SPEC.md](SPEC.md).
 
 ## Requirements
 

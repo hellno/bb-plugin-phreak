@@ -5,11 +5,11 @@ earlier build passed through the server (reply, lookup, gated send; ~0.8 s to
 the first audio byte). On 2026-11-23 the owner's first voice session, while
 only listening, logged 7 speech starts and 4 replies talked over: room noise
 taken for speech. With the noise gate added since (§4.2), the owner's two
-sessions on 2026-11-24 (AirPods, about 4 minutes) went well: 3 speech starts,
-none false; the gate kept out 80 sounds, the loudest at -24.7 dBFS; the floor
+sessions on 2026-11-24 (AirPods, about 4 minutes) went well, talking the
+thread through and sending: 3 speech starts, none false; the gate kept out 80 sounds, the loudest at -24.7 dBFS; the floor
 sat at the -62 dBFS limit and the voice peaked at -10 to -16 dBFS. Not
-separately confirmed by voice: reconnects, unsend, drafts, new threads and
-answering question cards.
+separately confirmed by voice: stop, "tell it now", announcements, reconnects,
+unsend, drafts, new threads and answering question cards.
 
 ## 1. What Phreak is
 
