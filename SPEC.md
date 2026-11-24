@@ -1,9 +1,15 @@
 # Phreak spec
 
-Status: plugin v0.1, 2026-11-22. A scripted spoken test through the server
-passed (reply, lookup, send; ~0.8 s to first audio). The browser panel,
-answering cards by voice, announcements, unsend, drafts and new threads are
-untested.
+Status: plugin v0.1, 2026-11-23. On 2026-11-22 a scripted spoken test of an
+earlier build passed through the server (reply, lookup, gated send; ~0.8 s to
+the first audio byte). On 2026-11-23 the owner's first voice session, while
+only listening, logged 7 speech starts and 4 replies talked over: room noise
+taken for speech. With the noise gate added since (§4.2), the owner's two
+sessions on 2026-11-24 (AirPods, about 4 minutes) went well: 3 speech starts,
+none false; the gate kept out 80 sounds, the loudest at -24.7 dBFS; the floor
+sat at the -62 dBFS limit and the voice peaked at -10 to -16 dBFS. Not
+separately confirmed by voice: reconnects, unsend, drafts, new threads and
+answering question cards.
 
 ## 1. What Phreak is
 
@@ -28,10 +34,11 @@ picked.
 
 ## 2. Why another voice plugin
 
-Voice Mode (steveafrost, MIT) relays each utterance verbatim and its model sees
-little of the chat. Hands-Free (mattwynne) sends dictation without discussion.
-Handsfree (swairshah) needs `gpt-live-1`, which refuses the ChatGPT sign-in.
-bb's side chat is the closest in spirit but text only.
+bb already has voice plugins: Voice Mode, Hands-Free, Handsfree and BB Live.
+Phreak is a second participant rather than a relay: it discusses the thread
+with you and hands work to the agent only when you say so, and it runs on the
+ChatGPT plan through `codex-realtime`. bb's side chat is the closest in spirit
+but text only.
 
 ## 3. Owner decisions (2026-11-22)
 
@@ -45,7 +52,7 @@ bb's side chat is the closest in spirit but text only.
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |
 | Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad` (low eagerness, near-field noise reduction for headsets), no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
 
-Proposed but not yet confirmed: the name, the MIT licence and the panel UI.
+The MIT licence was confirmed on 2026-11-23. Proposed but not yet confirmed: the name.
 
 ## 4. Architecture
 
@@ -279,8 +286,13 @@ with `local` auth, which works over bb Connect.
 
 ### 4.8 Privacy
 
-While a session runs, the provider receives your mic audio, the digest and the
-fork's answers. Nothing goes out before Start, and nothing is stored.
+While a session runs, the provider receives your mic audio and everything
+Phreak adds to the conversation: the digest (about 16k tokens), each turn's new
+messages (up to 64k characters), the title, status and question cards,
+`read_thread` pages (commands, file paths, queries, URLs), action results and
+lookup answers; mic audio passes the noise gate first (§4.2), so sound it keeps
+out goes as silence. Nothing goes out before Start. Phreak keeps no audio or
+transcript; each lookup leaves an archived hidden fork in bb.
 
 ## 5. Not in v1
 

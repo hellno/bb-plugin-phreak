@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "description": "A realtime voice layer for bb chats: talk the chat through, then say \"send that\".",
+  "description": "Talk a bb thread through by voice, then say \"send that\".",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,7 +15,7 @@
   },
   "bb": {
     "name": "Phreak",
-    "description": "Talk a thread through with a voice model that knows the whole chat, then say \"send that\". Runs on your ChatGPT plan via codex-realtime.",
+    "description": "Talk a thread through by voice, then say \"send that\". It answers from the chat and hands work to the agent. Voice uses your ChatGPT plan.",
     "branding": {
       "icon": "Mic",
       "experimental_icons": {
