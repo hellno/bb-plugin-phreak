@@ -28,6 +28,7 @@ type PanelEvent =
   | { type: "latency"; ms: number };
 
 const AUDIO_CHECK_MS = 2_000;
+const MIC_REPORT_MS = 10_000; // the server logs the latest at the session's end, which may come from its side
 
 // Same-origin route, as in Voice Mode's session.ts (steveafrost/bb-plugin-voice-mode, MIT).
 function sessionUrl(threadId: string): string {
@@ -44,8 +45,7 @@ class Session {
   private opened = false;
   private closed = false;
   private thinkingAt: number | null = null; // when your speech ended, until the reply is audible
-  /** The mic's loudness from 0 to 1, for the level meter: rises at once, falls gently. Muted, it falls to 0. */
-  level = 0;
+  private micReports: ReturnType<typeof setInterval> | undefined;
 
   // Must run inside the Start click: SessionAudio needs the user gesture. Throws if audio or the socket cannot start.
   constructor(
@@ -67,7 +67,6 @@ class Session {
       this.end(event.reason || (this.opened ? "The connection to Phreak closed." : "Could not reach the Phreak server."));
     this.audio
       .startMic((frame) => {
-        this.level = Math.max(loudness(frame), this.level * 0.8);
         if (this.ws.readyState === WebSocket.OPEN) this.ws.send(frame);
       })
       .catch((error: unknown) => this.end(`Microphone unavailable: ${error instanceof Error ? `${error.name}: ` : ""}${errorText(error)}`));
@@ -78,6 +77,13 @@ class Session {
         if (!running) this.end("The browser kept audio off. Press Start.");
       });
     }, AUDIO_CHECK_MS);
+    // Started last, so a constructor that throws leaves no timer behind.
+    this.micReports = setInterval(() => this.sendMicReport(), MIC_REPORT_MS);
+  }
+
+  /** The level meter's reading: the mic's loudness from 0 to 1, and whether Phreak hears it as speech. */
+  get meter(): { level: number; passing: boolean } {
+    return this.audio.meter;
   }
 
   mute(muted: boolean): void {
@@ -91,6 +97,8 @@ class Session {
   end(reason: string): void {
     if (this.closed) return;
     this.closed = true;
+    clearInterval(this.micReports);
+    this.sendMicReport();
     this.ws.close();
     this.audio.close();
     this.emit({ type: "ended", reason });
@@ -127,6 +135,10 @@ class Session {
     this.report(message);
   }
 
+  private sendMicReport(): void {
+    this.send({ type: "mic", report: this.audio.micReport() });
+  }
+
   private send(message: ClientMessage): void {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message));
   }
@@ -147,15 +159,6 @@ class Session {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** A PCM16 frame's loudness from 0 to 1: -55 dBFS (a quiet room) to -15 dBFS (close speech). */
-function loudness(frame: ArrayBuffer): number {
-  const pcm = new Int16Array(frame);
-  let sum = 0;
-  for (const sample of pcm) sum += sample * sample;
-  const rms = Math.sqrt(sum / Math.max(1, pcm.length)) / 0x8000;
-  return Math.min(1, Math.max(0, (20 * Math.log10(rms || 1e-9) + 55) / 40));
 }
 
 type Entry = (CaptionMessage | ActionMessage) & { key: string };
@@ -392,11 +395,13 @@ function PhreakPanel({ threadId }: { threadId: string }) {
       ? ""
       : `${CHIP[shown].label}${view.muted && shown !== "muted" ? ", muted" : ""}.` +
         (view.state === "ended" && view.reason !== null && ROUTINE.test(view.reason) ? ` ${view.reason}` : "");
-  const level = useCallback(() => session.current?.level ?? 0, []);
-  // Your newest line, the only empty one worth showing: it is still being heard or transcribed.
-  const hearingKey = live ? view.entries.filter((entry) => entry.type === "caption" && entry.role === "user").at(-1)?.key : undefined;
-  // Empty captions show only as your newest line in a live session: still being heard or transcribed.
-  const lines = view.entries.filter((entry) => entry.type === "action" || entry.text !== "" || entry.key === hearingKey);
+  const level = useCallback(() => session.current?.meter ?? SILENT, []);
+  // Your newest line holds its place while empty, until its final caption says no words came. Before the server names
+  // the turn, your speaking line shows only while you talk or Phreak thinks, so a start that never became a turn hides.
+  const newestYours = view.entries.filter((entry) => entry.type === "caption" && entry.role === "user").at(-1)?.key;
+  const holdsPlace = (entry: Entry) =>
+    live && entry.type === "caption" && !entry.final && entry.key === newestYours && (entry.key !== HEARING.key || view.talking || view.state === "thinking");
+  const lines = view.entries.filter((entry) => entry.type === "action" || entry.text !== "" || holdsPlace(entry));
   const empty = lines.length === 0;
   return (
     <div className="flex h-full min-h-0 flex-col text-sm">
@@ -460,13 +465,13 @@ function StartHere({ buttonRef, onStart }: { buttonRef: RefObject<HTMLButtonElem
       <button ref={buttonRef} type="button" aria-label="Start voice session" className={`${BUTTON} ${PRIMARY}`} onClick={onStart}>
         Start
       </button>
-      <p className="text-xs">Best with headphones</p>
+      <p className="text-xs">Best with a headset</p>
     </div>
   );
 }
 
 /** A live session before anyone spoke: the mic level, big, so you can see it hears you. */
-function Waiting({ level, label }: { level: () => number; label: string }) {
+function Waiting({ level, label }: { level: () => { level: number; passing: boolean }; label: string }) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
       <LevelMeter level={level} large />
@@ -488,28 +493,32 @@ function StateChip({ shown }: { shown: Shown }) {
 }
 
 const BAR_SHAPE = [0.55, 1, 0.75, 0.4];
+const SILENT = { level: 0, passing: false };
 
-/** Thin bars that follow the mic: they move while it hears you and lie flat while silent or muted. */
-function LevelMeter({ level, large = false }: { level: () => number; large?: boolean }) {
+/** Thin bars that follow the mic: faint while Phreak treats the sound as noise, full once it hears speech. */
+function LevelMeter({ level, large = false }: { level: () => { level: number; passing: boolean }; large?: boolean }) {
   const bars = useRef<(HTMLSpanElement | null)[]>([]);
   useEffect(() => {
     let frame = requestAnimationFrame(function draw() {
-      const value = level();
-      bars.current.forEach((bar, i) => bar?.style.setProperty("transform", `scaleY(${0.15 + 0.85 * value * BAR_SHAPE[i]})`));
+      const { level: value, passing } = level();
+      bars.current.forEach((bar, i) => {
+        bar?.style.setProperty("transform", `scaleY(${0.15 + 0.85 * value * BAR_SHAPE[i]})`);
+        bar?.style.setProperty("opacity", passing ? "1" : "0.35");
+      });
       frame = requestAnimationFrame(draw);
     });
     return () => cancelAnimationFrame(frame);
   }, [level]);
   return (
-    <span aria-hidden title="Microphone level" className={`flex items-center motion-reduce:hidden ${large ? "h-10 gap-1.5" : "h-4 gap-0.5"}`}>
+    <span aria-hidden title="Microphone level: faint is noise Phreak ignores, full is speech it hears" className={`flex items-center motion-reduce:hidden ${large ? "h-10 gap-1.5" : "h-4 gap-0.5"}`}>
       {BAR_SHAPE.map((_, i) => (
         <span
           key={i}
           ref={(bar) => {
             bars.current[i] = bar;
           }}
-          style={{ transform: "scaleY(0.15)" }}
-          className={`h-full rounded-full bg-muted-foreground ${large ? "w-1" : "w-0.5"}`}
+          style={{ transform: "scaleY(0.15)", opacity: 0.35 }}
+          className={`h-full rounded-full bg-foreground ${large ? "w-1" : "w-0.5"}`}
         />
       ))}
     </span>

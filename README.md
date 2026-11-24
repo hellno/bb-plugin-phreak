@@ -55,17 +55,22 @@ announcements, unsend, drafts and new threads are still untested. See
 
 ## Use
 
-Open a thread, open the **Phreak** panel, press **Start**, and talk. Use
-headphones: speaker output can trigger the voice detection. The session ends
-when you press End, hide the panel, switch threads, or stay quiet 15 minutes.
+Open a thread, open the **Phreak** panel, press **Start**, and talk. Use a
+headset: speaker output can trigger the voice detection, and Phreak filters
+noise for a close mic. Short pauses rarely end your turn. The session
+ends when you press End, hide the panel, switch threads, or stay quiet 15
+minutes.
 
 - **Shortcut:** <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> (Ctrl on
   macOS too) starts or ends the session, opening the panel if it is hidden.
   Rebind it in Settings → Keyboard.
 - **State:** a chip beside the buttons says Connecting, Listening, Muted,
-  Thinking, Looking up, Speaking, Reconnecting or Ended, and small bars move
-  while the mic hears you. A soft pulse means a reply is on its way; a quiet
-  double tick, a lookup is running.
+  Thinking, Looking up, Speaking, Reconnecting or Ended. A soft pulse means a
+  reply is on its way; a quiet double tick, a lookup is running.
+- **Mic bars:** they follow your mic. Faint bars are sound Phreak ignores as
+  noise; full bars are speech it hears. Phreak filters out steady noise,
+  typing and knocks. While it talks, only a clear voice at speaking volume
+  cuts it off, so speak up to interrupt; a loud voice nearby can still pass.
 - **Captions:** Phreak's words appear as it speaks. Yours appear as a "You …"
   line the moment you start talking and fill in once you pause.
 - **Latency:** turn on **Show reply latency** in Phreak's settings, or run

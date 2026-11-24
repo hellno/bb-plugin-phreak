@@ -43,7 +43,7 @@ bb's side chat is the closest in spirit but text only.
 | Sending | Immediately when you ask. No confirmation step. |
 | Authorization | The voice model decides from your words, in any phrasing. No phrase lists or other hardcoded gates. |
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |
-| Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad`, no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
+| Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad` (low eagerness, near-field noise reduction for headsets), no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
 
 Proposed but not yet confirmed: the name, the MIT licence and the panel UI.
 
@@ -87,6 +87,56 @@ unchecked. Usage counts against the plan.
   suppression and auto gain, from an AudioWorklet (or `ScriptProcessor`) on a
   24 kHz AudioContext. Mute disables the mic track, which then sends silence,
   so voice detection still hears your turn end.
+- **Voice detection:** OpenAI's `semantic_vad` with `eagerness: "low"`, so
+  short pauses rarely end your turn (it waits up to 8 s, against 4 s by
+  default). `noise_reduction: { type: "near_field" }`, tuned for headset mics,
+  filters the input before voice detection, so background noise starts fewer
+  turns; a laptop mic may do worse with it.
+- **Noise gate** (`gate.ts`, in the browser, before anything is sent): only
+  sustained sound well above the room's quiet floor goes out; everything else
+  is sent as silence, one frame out for every frame in, so turn ends and mute
+  keep working.
+  - A frame counts as voice when most of it, not one click, is 12 dB over the
+    floor. While Phreak is audible and for 600 ms after, it must be 18 dB over
+    the floor and at least -38 dBFS: talking over Phreak takes a real voice.
+  - The gate opens on 3 such frames among those held (5 while Phreak is
+    audible). It holds up to 480 ms back while deciding and releases it on
+    open, so the first syllable survives without a standing delay. It stays
+    open while most of each frame is voice, and 480 ms past it, for gaps
+    between words. When Phreak starts talking, an open gate closes and the
+    sound must pass the stricter test again.
+  - The open threshold stays between -50 and -32 dBFS (-38 and -32 while
+    Phreak is audible). The floor learns from closed frames, quick to fall and
+    slow to rise, between -62 and -35 dBFS; digital silence (below -90) and
+    muted frames are ignored, and muting closes the gate. A sound that holds
+    the gate open for 3 s while changing less than 2 dB from frame to frame on
+    average becomes the new floor: noise jitters under 1 dB even when it
+    drifts or cycles, and speech swings about 4 dB with every syllable.
+  - In node simulations on synthetic frames, steady and rising noise, typing,
+    knocks, TV-like noise and a voice at -40 dBFS while Phreak talks never
+    open it, and speech opens it with its onset intact, Phreak speaking or
+    not, including 8 s of fluent speech without pauses. Known limits: a fan,
+    rumble or cycling noise that starts suddenly passes for about 3 s before
+    it is learned; noise louder than -32 dBFS (speaking volume) passes again
+    every few seconds; a 300 ms creak opens it; a second voice louder than
+    -38 dBFS passes even while Phreak talks, and your own voice softer than
+    that cannot cut Phreak off; a word shorter than 200 ms may not either. The
+    first mic report's loudest passed level shows whether -38 suits a real
+    headset. It has not yet been tested by voice.
+- **Meter:** the bars follow the mic. They are faint while the gate keeps the
+  sound out and full while Phreak hears speech, so a dead mic (flat) differs
+  from filtered noise (faint).
+- **Logs:** each session logs two lines at its end, with no words. The turn
+  counts: speech starts; turns, with those without words and failed
+  transcriptions; starts before a reply was heard (turns that ended too
+  early); and replies you talked over (from the browser's playback reports).
+  The mic report, sent by the panel every 10 s and at End: the device name,
+  the browser's echo, noise and gain settings, gate opens (and those while
+  Phreak spoke), share of time open, sounds kept out, relearned floors, the
+  floor at start, now and at its highest, and the loudest sound kept out and
+  passed. A floor that climbs while you only listen points to the browser's
+  auto gain, the next thing to turn off; `server_vad` would trade away the
+  pause handling.
 - **Down:** a JSON `audio_start { itemId }` precedes each assistant item's PCM.
   The browser schedules it gaplessly and counts the samples played per item.
 - **Barge-in:** on `speech_started` the server sends `interrupt`, stops
@@ -98,7 +148,7 @@ unchecked. Usage counts against the plan.
 - The AudioContext is created inside the Start click, so Safari and mobile allow
   it; Start shows the error if audio cannot start. Latency is measured from
   `thinking` (your speech ended) to the first audible sample. Speaker output
-  can trigger voice detection, so the README recommends headphones.
+  can trigger voice detection, so the README recommends a headset.
 - **Working cues**, looped on the playback path, mute or not: a soft 200 Hz
   swell each second once `thinking` passes 700 ms, and a quiet double tick every
   3 s while `lookups { running }` is above 0 and no one speaks.
@@ -201,9 +251,12 @@ A "Phreak" thread tab (`app.slots.experimental_tab`).
   routine endings through a status region. Captions stay silent.
 - **Captions** update in place: grey until final. Your line appears as "You …"
   when speech starts (`interrupt` then `listening`). Your words fill it in after
-  you pause: the Realtime API transcribes a turn once it is committed. Only
-  your newest empty line shows, so a failed transcription disappears at your
-  next turn. The list follows the newest line unless you scroll up.
+  you pause: the Realtime API transcribes a turn once it is committed. Your
+  newest line holds its place while empty, even if Phreak starts answering
+  first, until its final caption says no words came (the server sends a final
+  caption even when empty). Before the server names the turn, the line shows
+  only while you talk or Phreak thinks. The list follows the newest line unless
+  you scroll up.
 - **Action cards** show bb's status, the detail, and the text through bb's
   `Markdown`, as the chat shows it.
 - **Problems** lead with the fix (for example, add `phreak` to

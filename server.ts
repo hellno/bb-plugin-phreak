@@ -41,8 +41,11 @@ const SESSION_CONFIG = {
     input: {
       format: { type: "audio/pcm", rate: SAMPLE_RATE },
       transcription: { model: "gpt-4o-mini-transcribe" },
+      // Filters the input before voice detection and the model, so background noise starts fewer turns. Tuned for headset mics.
+      noise_reduction: { type: "near_field" },
       // Phreak creates every response itself, so only a completed, uninterrupted one runs its calls.
-      turn_detection: { type: "semantic_vad", create_response: false, interrupt_response: true },
+      // Low eagerness waits out pauses mid-sentence (up to 8 s, against 4 s by default) before ending your turn.
+      turn_detection: { type: "semantic_vad", eagerness: "low", create_response: false, interrupt_response: true },
     },
     output: { format: { type: "audio/pcm", rate: SAMPLE_RATE }, voice: "marin" },
   },
@@ -180,6 +183,10 @@ class Session {
   private readonly answers = new Map<string, (answer: ClientMessage | null) => void>();
   private readonly hardLimit = setTimeout(() => this.end("The session reached its 60-minute limit."), MAX_SESSION_MS);
   private readonly silence = setTimeout(() => this.end("Ended after 15 minutes of silence."), SILENCE_MS);
+  /** Turn-taking counts, logged at the end without any words, to tell false starts from early stops. */
+  private readonly turns = { starts: 0, commits: 0, wordless: 0, failed: 0, resumed: 0, cutOff: 0 };
+  /** The panel's latest report on the mic and its noise gate, as a log line. */
+  private mic = "no mic report";
 
   constructor(
     private readonly bb: BbPluginApi,
@@ -268,6 +275,12 @@ class Session {
     this.attempt?.close();
     this.lookups.close();
     if (detail) this.bb.log.warn(`session ${this.id} (${this.threadId}): ${reason} ${detail}`);
+    const { starts, commits, wordless, failed, resumed, cutOff } = this.turns;
+    this.bb.log.info(
+      `session ${this.id}: ${starts} speech starts, ${commits} turns (${wordless} without words, ${failed} failed transcriptions), ` +
+        `${resumed} resumed before a reply, ${cutOff} replies talked over`,
+    );
+    this.bb.log.info(`session ${this.id}: ${this.mic}`);
     this.toBrowser({ type: "ended", reason: detail ? `${reason} ${detail}` : reason });
     this.browser.close(1000);
   }
@@ -285,6 +298,7 @@ class Session {
   onBrowserText(data: string): void {
     const message = parseJson(data) as ClientMessage | null;
     if (message?.type === "drafted") return this.answers.get(String(message.id))?.(message);
+    if (message?.type === "mic") return void (this.mic = micLine(message.report));
     if (message?.type !== "played" || !Array.isArray(message.items)) return;
     for (const entry of message.items) {
       const audio = this.audio.get(String(entry?.itemId));
@@ -294,6 +308,8 @@ class Session {
       this.settle(String(entry.itemId));
     }
     this.unconfirmed.clear();
+    // Items in a report other than a reconnect's flush are replies you talked over.
+    if (message.items.length > 0 && !this.answers.has("played")) this.turns.cutOff++;
     this.answers.get("played")?.(message);
   }
 
@@ -330,6 +346,9 @@ class Session {
       case "input_audio_buffer.speech_started":
         this.silence.refresh();
         a.userSpeaking = true;
+        this.turns.starts++;
+        // Speaking again before the reply was heard: the turn likely ended too early.
+        if (a.response && !a.response.audible && !a.response.interrupted) this.turns.resumed++;
         if (a.response) a.response.interrupted = true;
         this.toBrowser({ type: "interrupt" });
         this.status("listening");
@@ -343,6 +362,8 @@ class Session {
       case "conversation.item.input_audio_transcription.delta":
       case "conversation.item.input_audio_transcription.completed":
       case "conversation.item.input_audio_transcription.failed":
+        if (event.type.endsWith(".failed")) this.turns.failed++;
+        else if (event.type.endsWith(".completed") && !event.transcript?.trim()) this.turns.wordless++;
         this.onTranscript(itemId, "User", event.delta ?? event.transcript ?? "", !event.type.endsWith(".delta"));
         break;
       case "response.created":
@@ -379,6 +400,7 @@ class Session {
 
   private onCommitted(a: Attempt, itemId: string): void {
     a.userSpeaking = false;
+    this.turns.commits++;
     // Holds the utterance's place in the captions and the recap ahead of the reply it triggers.
     this.line(itemId, "User");
     this.toBrowser({ type: "caption", role: "user", itemId, text: "", final: false });
@@ -393,7 +415,8 @@ class Session {
     if (line.final) return;
     line.text = final ? text.trim() : line.text + text;
     line.final = final;
-    if (line.text) this.toBrowser({ type: "caption", role: who === "User" ? "user" : "assistant", itemId, text: line.text, final });
+    // A final caption goes out even when empty, so the panel can drop the place it held for words that never came.
+    if (line.text || final) this.toBrowser({ type: "caption", role: who === "User" ? "user" : "assistant", itemId, text: line.text, final });
   }
 
   private line(itemId: string, who: Line["who"]): Line {
@@ -559,6 +582,23 @@ function parseJson(text: string): unknown {
   } catch {
     return null;
   }
+}
+
+/** The panel's mic report as one log line: numbers, flags and the device's name, nothing anyone said. */
+function micLine(report: unknown): string {
+  const r = (report ?? {}) as Record<string, unknown>;
+  const n = (key: string) => (typeof r[key] === "number" && Number.isFinite(r[key]) ? Math.round(r[key] * 10) / 10 : "?");
+  const flag = (key: string) => (r[key] === true ? "on" : r[key] === false ? "off" : "?");
+  const device = typeof r.device === "string" ? r.device.replace(/[^\p{L}\p{N} ()._:-]/gu, "").slice(0, 80) : "";
+  const frames = typeof r.frames === "number" && Number.isFinite(r.frames) ? Math.max(0, Math.round(r.frames)) : 0;
+  const openShare = frames ? `${Math.round(((Number(r.openFrames) || 0) / frames) * 100)}%` : "?";
+  return (
+    `mic "${device || "unnamed"}" echo ${flag("echoCancellation")}, noise ${flag("noiseSuppression")}, gain ${flag("autoGainControl")}; ` +
+    `gate opened ${n("opens")} times (${n("strictOpens")} while Phreak spoke), open ${openShare} of ${frames} frames, ` +
+    `${n("rejected")} sounds kept out, ${n("relearned")} steady sounds relearned; ` +
+    `floor ${n("firstFloorDb")} dB at start, ${n("floorDb")} now, ${n("maxFloorDb")} highest; ` +
+    `loudest kept out ${n("noisePeakDb")} dB, loudest passed ${n("speechPeakDb")} dB`
+  );
 }
 
 function isOverflow(error: RealtimeError | undefined): boolean {

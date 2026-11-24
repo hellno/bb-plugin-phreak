@@ -29,7 +29,7 @@ export type ServerMessage =
   | { type: "audio_start"; itemId: string }
   /** Flush all playback, then reply with `played`. Sent on barge-in and on reconnect. */
   | { type: "interrupt" }
-  /** `text` is the full text so far for this item. An empty user caption at commit reserves its place. */
+  /** `text` is the full text so far for this item. An empty user caption at commit reserves its place; a final empty one says no words came. */
   | { type: "caption"; role: "user" | "assistant"; itemId: string; text: string; final: boolean }
   | ({ type: "action"; tool: ActionTool } & ActionResult)
   /** Text for the panel to add to its thread's composer, after any draft there; the panel answers `drafted`. */
@@ -43,8 +43,29 @@ export type ServerMessage =
 
 export type Played = { itemId: string; ms: number }[];
 
+/** The mic and its noise gate, sent every few seconds and logged by the server at the session's end. Levels in dBFS. */
+export type MicReport = {
+  device: string;
+  echoCancellation: boolean | null;
+  noiseSuppression: boolean | null;
+  autoGainControl: boolean | null;
+  frames: number;
+  openFrames: number;
+  opens: number;
+  strictOpens: number;
+  rejected: number;
+  relearned: number;
+  floorDb: number;
+  firstFloorDb: number | null;
+  maxFloorDb: number;
+  speechPeakDb: number;
+  noisePeakDb: number;
+};
+
 export type ClientMessage =
   /** Answer to `interrupt`: how much of every flushed item was heard (0 if none). */
   | { type: "played"; items: Played }
   /** Answer to `draft` once the composer took it, or the composer's error. */
-  | { type: "drafted"; id: string; ok: boolean; error?: string };
+  | { type: "drafted"; id: string; ok: boolean; error?: string }
+  /** How the mic and its noise gate are doing. */
+  | { type: "mic"; report: MicReport };
