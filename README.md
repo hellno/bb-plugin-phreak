@@ -60,11 +60,14 @@ A headset is recommended: speaker output can trigger the voice detection.
    bb plugin config codex-realtime set allowedPlugins voice-mode,phreak
    ```
 
-3. Install Phreak:
+3. Install Phreak from bb's community store (Settings → Plugins, or):
 
    ```sh
-   bb plugin install git:github.com/hellno/bb-plugin-phreak
+   bb plugin install phreak
    ```
+
+   It tracks releases tagged `v0.1.0` and later; bb offers each update and
+   never installs one on its own.
 
 ## Use
 
