@@ -1,11 +1,12 @@
 // Phreak's panel for the thread it sits beside: Start/End and Mute on one row
 // with a state chip, live captions, and a card per action. Drafts go into the
 // thread's composer. Ctrl+Shift+Space starts or ends, opening the panel if needed.
-import { useCallback, useEffect, useReducer, useRef, type MouseEvent, type RefObject, type UIEvent } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type MouseEvent, type RefObject, type UIEvent } from "react";
 import {
   Markdown,
   definePluginApp,
   experimental_Icon as Icon,
+  experimental_copyToClipboard,
   experimental_useSidebarThreads,
   experimental_useTabVisible,
   useComposer,
@@ -13,15 +14,17 @@ import {
   type ExperimentalThreadTabProps,
 } from "@get-bb/plugin-sdk/app";
 import { SessionAudio, type Cue } from "./audio";
+import { sessionDebug } from "./diagnostics";
 import { PLUGIN_ID, SESSION_PATH } from "./protocol";
-import type { ActionTool, ClientMessage, ServerMessage, SessionState } from "./protocol";
+import type { ActionTool, ClientMessage, MicReport, ServerMessage, SessionState } from "./protocol";
 
 type CaptionMessage = Extract<ServerMessage, { type: "caption" }>;
 type ActionMessage = Extract<ServerMessage, { type: "action" }>;
 
 /** What the panel follows: every server message but those only the audio or composer takes, plus local events. */
 type PanelEvent =
-  | Exclude<ServerMessage, { type: "audio_start" | "draft" }>
+  | Exclude<ServerMessage, { type: "audio_start" | "draft" | "ended" }>
+  | { type: "ended"; reason: string; mic?: MicReport }
   | { type: "start" }
   | { type: "mute"; muted: boolean }
   | { type: "playing"; playing: boolean }
@@ -98,10 +101,11 @@ class Session {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.micReports);
-    this.sendMicReport();
+    const mic = this.audio.micReport();
+    this.send({ type: "mic", report: mic });
     this.ws.close();
     this.audio.close();
-    this.emit({ type: "ended", reason });
+    this.emit({ type: "ended", reason, mic });
   }
 
   private receive(data: unknown): void {
@@ -288,6 +292,14 @@ function PhreakTab({ threadId }: ExperimentalThreadTabProps) {
 function PhreakPanel({ threadId }: { threadId: string }) {
   const visible = experimental_useTabVisible();
   const [view, dispatch] = useReducer(reduce, IDLE);
+  const debugKey = `phreak:last-session:${threadId}`;
+  const [debug, setDebug] = useState(() => {
+    try {
+      return sessionStorage.getItem(debugKey);
+    } catch {
+      return null;
+    }
+  });
   const composer = useComposer();
   const settings = useSettings();
   const session = useRef<Session | null>(null);
@@ -313,13 +325,30 @@ function PhreakPanel({ threadId }: { threadId: string }) {
   const lastTop = useRef(0);
 
   const start = () => {
+    const started = new Date();
+    let sessionId: string | null = null;
+    let lastError: string | null = null;
+    const receive = (event: PanelEvent) => {
+      if (event.type === "status") sessionId = event.sessionId;
+      if (event.type === "error") lastError = event.message;
+      if (event.type === "ended") {
+        const report = sessionDebug(threadId, started, sessionId, event.reason, lastError, event.mic);
+        setDebug(report);
+        try {
+          sessionStorage.setItem(debugKey, report);
+        } catch {
+          // Storage may be disabled. The mounted panel still has the report.
+        }
+      }
+      dispatch(event);
+    };
+    dispatch({ type: "start" });
     try {
-      session.current = new Session(threadId, dispatch, draft);
+      session.current = new Session(threadId, receive, draft);
     } catch (error) {
-      return dispatch({ type: "ended", reason: `Phreak could not start: ${errorText(error)}` });
+      return receive({ type: "ended", reason: `Phreak could not start: ${errorText(error)}` });
     }
     pinned.current = true;
-    dispatch({ type: "start" });
   };
   const toggle = live ? () => end("You ended the session.") : start;
   // Start moves between the empty panel and the top row, so focus follows the button you pressed.
@@ -453,7 +482,37 @@ function PhreakPanel({ threadId }: { threadId: string }) {
           )}
         </ol>
       </div>
+      {!live && debug ? <SessionDebug key={debug} report={debug} /> : null}
     </div>
+  );
+}
+
+function SessionDebug({ report }: { report: string }) {
+  const [result, setResult] = useState<boolean | null>(null);
+  return (
+    <footer className="border-t border-border px-4 py-2">
+      <button
+        type="button"
+        className={`${BUTTON} ${OUTLINE}`}
+        onClick={async () => setResult(await experimental_copyToClipboard({ text: report }))}
+      >
+        <Icon name="Copy" aria-hidden className="size-3.5" />
+        Copy session debug info
+      </button>
+      <span role="status" className="ml-2 text-xs text-muted-foreground">
+        {result === true ? "Copied" : result === false ? "Select and copy below." : ""}
+      </span>
+      {result === false ? (
+        <textarea
+          readOnly
+          aria-label="Session debug info"
+          value={report}
+          onFocus={(event) => event.currentTarget.select()}
+          className="mt-2 w-full rounded border border-border bg-background p-2 font-mono text-xs"
+          rows={4}
+        />
+      ) : null}
+    </footer>
   );
 }
 

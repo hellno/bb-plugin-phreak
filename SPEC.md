@@ -179,7 +179,8 @@ unchecked. Usage counts against the plan.
   rebuilds it.
 - A session ends after 15 minutes without user speech and always after 60
   minutes.
-  Nothing is persisted.
+  The conversation ends there. The browser tab keeps the last debug report
+  for each thread in session storage so it can be copied after reopening the panel.
 
 ### 4.4 Context
 

@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import type { BbPluginApi, ExperimentalPluginWebSocket } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { micLine } from "./diagnostics";
 import { SAMPLE_RATE, SESSION_PATH, type ClientMessage, type ServerMessage, type SessionState } from "./protocol";
 import { Lookups, TOOLS, act, errorMessage, loadMessages, pendingQuestionItems, questionItem, statusItem, threadReader, type ActionTarget, type Interaction } from "./tools";
 
@@ -329,7 +330,7 @@ class Session {
   }
 
   private status(state: SessionState): void {
-    this.toBrowser({ type: "status", state });
+    this.toBrowser({ type: "status", state, sessionId: this.id });
   }
 
   // ---- Upstream
@@ -582,23 +583,6 @@ function parseJson(text: string): unknown {
   } catch {
     return null;
   }
-}
-
-/** The panel's mic report as one log line: numbers, flags and the device's name, nothing anyone said. */
-function micLine(report: unknown): string {
-  const r = (report ?? {}) as Record<string, unknown>;
-  const n = (key: string) => (typeof r[key] === "number" && Number.isFinite(r[key]) ? Math.round(r[key] * 10) / 10 : "?");
-  const flag = (key: string) => (r[key] === true ? "on" : r[key] === false ? "off" : "?");
-  const device = typeof r.device === "string" ? r.device.replace(/[^\p{L}\p{N} ()._:-]/gu, "").slice(0, 80) : "";
-  const frames = typeof r.frames === "number" && Number.isFinite(r.frames) ? Math.max(0, Math.round(r.frames)) : 0;
-  const openShare = frames ? `${Math.round(((Number(r.openFrames) || 0) / frames) * 100)}%` : "?";
-  return (
-    `mic "${device || "unnamed"}" echo ${flag("echoCancellation")}, noise ${flag("noiseSuppression")}, gain ${flag("autoGainControl")}; ` +
-    `gate opened ${n("opens")} times (${n("strictOpens")} while Phreak spoke), open ${openShare} of ${frames} frames, ` +
-    `${n("rejected")} sounds kept out, ${n("relearned")} steady sounds relearned; ` +
-    `floor ${n("firstFloorDb")} dB at start, ${n("floorDb")} now, ${n("maxFloorDb")} highest; ` +
-    `loudest kept out ${n("noisePeakDb")} dB, loudest passed ${n("speechPeakDb")} dB`
-  );
 }
 
 function isOverflow(error: RealtimeError | undefined): boolean {
