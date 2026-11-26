@@ -92,6 +92,12 @@ minutes, or reach 60 minutes.
   line the moment you start talking and fill in once you pause.
 - **Latency:** turn on **Show reply latency** in Phreak's settings, or run
   `bb plugin config phreak set showLatency true`.
+- **Debug a session:** after End or a failed Start, press **Copy session debug
+  info** and paste it into an agent chat with a sentence about what went wrong.
+  The report includes the time, thread, end reason, last panel error, and
+  available mic statistics. Once bb accepts the session, the report also gives
+  the agent a command to find that session's turn counts and errors on the bb host.
+  The last report for each thread stays available in the same browser tab across refreshes.
 
 ## Privacy
 
@@ -117,10 +123,9 @@ The panel says how to fix most problems. The common ones:
   browser.
 - **It starts or stops on its own:** use a headset, and watch the mic bars.
   Full bars while you are quiet mean the noise passes as speech. After a
-  session, `bb plugin logs phreak` ends with two lines, the turn counts and a
-  mic report; include both in an issue.
+  session, use **Copy session debug info** to share the mic levels and log lookup.
 - **It doesn't hear you:** if the bars stay faint while you talk, speak closer
-  to the mic, or include the mic report line in an issue.
+  to the mic, or share the session debug info with an agent.
 
 ## Develop
 
