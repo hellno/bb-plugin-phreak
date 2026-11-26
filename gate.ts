@@ -8,6 +8,7 @@ const MARGIN_DB = 12; // above the floor to open
 const STRICT_MARGIN_DB = 18; // while Phreak is audible, and just after
 const ATTACK_FRAMES = 3; // loud frames among those held to open: ~120 ms of voice
 const STRICT_ATTACK_FRAMES = 5; // ~200 ms while Phreak is audible
+const ATTACK_STEP_DB = 3; // average loud-frame level change, to keep steady traffic from opening the gate
 const CANDIDATE_DB = 6; // above the floor, a frame may be the start of speech and is held
 const MAX_HELD = 12; // ~480 ms of onset kept back while deciding, released on open
 const QUIET_FRAMES = 3; // ~120 ms below the candidate level ends a held sound; shorter dips are gaps between syllables
@@ -17,12 +18,12 @@ const STEADY_FRAMES = 75; // ~3 s open at a near-constant level: steady noise su
 const STEADY_STEP_DB = 2; // mean change from frame to frame: noise jitters under 1 dB, even when it drifts or cycles; speech swings about 4
 const MIN_OPEN_DB = -50; // never opens on near-silence
 const STRICT_MIN_OPEN_DB = -38; // talking over Phreak takes a voice at least this loud, so a voice across the room does not cut it off
-const MAX_OPEN_DB = -32; // sustained close-mic speech always opens, however noisy the room
+const MAX_OPEN_DB = -32; // cap the level requirement for close-mic speech in a noisy room
 const FLOOR_MIN_DB = -62; // lower, and the -50 limit would make strict and normal the same
 const SILENT_DB = -90; // digital silence (mute, a device switch) says nothing about the room
 const FLOOR_MAX_DB = -35;
 
-type Held = { frame: Float32Array; db: number; loud: boolean };
+type Held = { frame: Float32Array; db: number; loud: boolean; voiced: boolean };
 
 export type GateStats = {
   frames: number;
@@ -68,6 +69,40 @@ function energyDb(frame: Float32Array, start: number, length: number): number {
   return 10 * Math.log10(sum / Math.max(1, length) || 1e-12);
 }
 
+/** Look for a repeating vocal-fold pulse. Clothing rub is often loud but aperiodic. */
+function hasVoicing(frame: Float32Array): boolean {
+  // Average four samples at a time (24 kHz to 6 kHz) and remove low-frequency rumble.
+  const band = new Float32Array(Math.floor(frame.length / 4));
+  let low = 0;
+  let totalEnergy = 0;
+  let bandEnergy = 0;
+  for (let i = 0; i < band.length; i++) {
+    const j = i * 4;
+    const sample = (frame[j] + frame[j + 1] + frame[j + 2] + frame[j + 3]) / 4;
+    low += 0.28 * (sample - low); // one-pole low-pass at about 310 Hz
+    band[i] = sample - low;
+    totalEnergy += sample * sample;
+    bandEnergy += band[i] * band[i];
+  }
+  if (bandEnergy <= 0.12 * totalEnergy) return false;
+
+  // Normalized autocorrelation at pitch periods of roughly 70–460 Hz.
+  for (let lag = 13; lag <= 85; lag++) {
+    let dot = 0;
+    let left = 0;
+    let right = 0;
+    for (let i = lag; i < band.length; i++) {
+      const a = band[i];
+      const b = band[i - lag];
+      dot += a * b;
+      left += a * a;
+      right += b * b;
+    }
+    if (dot > 0.5 * Math.sqrt(left * right)) return true;
+  }
+  return false;
+}
+
 export class NoiseGate {
   /** Whether frames pass on now. */
   open = false;
@@ -106,13 +141,16 @@ export class NoiseGate {
     if (stats.frames <= WARMUP_FRAMES) {
       if (db >= SILENT_DB) this.floor = clamp(this.floor + (db - this.floor) * (stats.frames === 1 ? 1 : 0.3), FLOOR_MIN_DB, FLOOR_MAX_DB);
       if (stats.frames === WARMUP_FRAMES) stats.firstFloorDb = round(this.floor);
-      return [this.silenced({ frame, db, loud: false })];
+      return [this.silenced(frame, db)];
     }
     const openAt = strict
       ? clamp(this.floor + STRICT_MARGIN_DB, STRICT_MIN_OPEN_DB, MAX_OPEN_DB)
       : clamp(this.floor + MARGIN_DB, MIN_OPEN_DB, MAX_OPEN_DB);
-    // When Phreak starts talking, whatever holds the gate open must pass the stricter test again.
-    if (becameStrict && this.open) this.close();
+    // Keep buffered audio for the onset, but count only new evidence once playback starts.
+    if (becameStrict) {
+      this.close();
+      for (const held of this.held) held.loud = false;
+    }
 
     if (this.open) {
       stats.openFrames++;
@@ -140,12 +178,18 @@ export class NoiseGate {
     // A frame whose second half is all sound is held anyway, so a sharp onset late in it is kept.
     const candidateAt = Math.min(Math.max(this.floor + CANDIDATE_DB, MIN_OPEN_DB - CANDIDATE_DB), openAt);
     const quiet = voice < candidateAt && tail < candidateAt;
-    if (quiet && this.held.length === 0) return [this.silenced({ frame, db, loud: false })];
+    if (quiet && this.held.length === 0) return [this.silenced(frame, db)];
     // Held in order, so frames come out as they went in.
-    this.held.push({ frame: frame.slice(), db, loud: voice >= openAt });
+    const loud = voice >= openAt;
+    this.held.push({ frame: frame.slice(), db, loud, voiced: loud && hasVoicing(frame) });
     this.quietRun = quiet ? this.quietRun + 1 : 0;
     if (this.quietRun >= QUIET_FRAMES) return this.release(false); // the sound ended without enough voice
-    if (this.held.filter((held) => held.loud).length >= (strict ? STRICT_ATTACK_FRAMES : ATTACK_FRAMES)) {
+    const loudFrames = this.held.filter((held) => held.loud);
+    if (
+      loudFrames.length >= (strict ? STRICT_ATTACK_FRAMES : ATTACK_FRAMES) &&
+      loudFrames.filter((held) => held.voiced).length >= (strict ? 2 : 1) &&
+      meanStep(loudFrames.map((held) => held.db)) >= ATTACK_STEP_DB
+    ) {
       this.open = true;
       this.hang = HANG_FRAMES;
       this.steady = [];
@@ -156,7 +200,9 @@ export class NoiseGate {
       return this.release(true);
     }
     // Hold back at most MAX_HELD frames; older ones go out as silence.
-    return this.held.length > MAX_HELD ? [this.silenced(this.held.shift()!)] : [];
+    if (this.held.length <= MAX_HELD) return [];
+    const oldest = this.held.shift()!;
+    return [this.silenced(oldest.frame, oldest.db)];
   }
 
   /** Closes the gate and returns the frames still held, as silence: on mute, and at the end, so every frame in has one out. */
@@ -181,14 +227,14 @@ export class NoiseGate {
 
   private release(pass: boolean): Float32Array[] {
     if (this.held.length > 0 && !pass) this.stats.rejected++;
-    const out = this.held.map((held) => (pass ? held.frame : this.silenced(held)));
+    const out = this.held.map((held) => (pass ? held.frame : this.silenced(held.frame, held.db)));
     this.held = [];
     this.quietRun = 0;
     return out;
   }
 
   /** Silence in place of a frame kept out, noting how loud it was. */
-  private silenced({ frame, db }: Held): Float32Array {
+  private silenced(frame: Float32Array, db: number): Float32Array {
     if (this.stats.frames > WARMUP_FRAMES) this.stats.noisePeakDb = Math.max(this.stats.noisePeakDb, round(db));
     return silence(frame);
   }

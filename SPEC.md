@@ -106,9 +106,13 @@ unchecked. Usage counts against the plan.
   - A frame counts as voice when most of it, not one click, is 12 dB over the
     floor. While Phreak is audible and for 600 ms after, it must be 18 dB over
     the floor and at least -38 dBFS: talking over Phreak takes a real voice.
-  - The gate opens on 3 such frames among those held (5 while Phreak is
-    audible). It holds up to 480 ms back while deciding and releases it on
-    open, so the first syllable survives without a standing delay. It stays
+  - The gate opens on 3 loud frames among those held (5 while Phreak is
+    audible). Their levels must vary by an average of 3 dB or more between
+    successive loud frames. At least one must contain a repeating pulse in
+    the voice pitch range (two during playback). The pitch check runs on
+    loud candidates at 6 kHz after removing low-frequency rumble. The
+    original mic audio stays buffered for up to 480 ms and is released when
+    the gate opens, preserving the onset of speech. The gate stays
     open while most of each frame is voice, and 480 ms past it, for gaps
     between words. When Phreak starts talking, an open gate closes and the
     sound must pass the stricter test again.
@@ -119,17 +123,12 @@ unchecked. Usage counts against the plan.
     the gate open for 3 s while changing less than 2 dB from frame to frame on
     average becomes the new floor: noise jitters under 1 dB even when it
     drifts or cycles, and speech swings about 4 dB with every syllable.
-  - In node simulations on synthetic frames, steady and rising noise, typing,
-    knocks, TV-like noise and a voice at -40 dBFS while Phreak talks never
-    open it, and speech opens it with its onset intact, Phreak speaking or
-    not, including 8 s of fluent speech without pauses. Known limits: a fan,
-    rumble or cycling noise that starts suddenly passes for about 3 s before
-    it is learned; noise louder than -32 dBFS (speaking volume) passes again
-    every few seconds; a 300 ms creak opens it; a second voice louder than
-    -38 dBFS passes even while Phreak talks, and your own voice softer than
-    that cannot cut Phreak off; a word shorter than 200 ms may not either. The
-    first mic report's loudest passed level shows whether -38 suits a real
-    headset. It has not yet been tested by voice.
+  - Offline replays with playback marked active kept four jacket recordings
+    and three road-traffic recordings silent at both capture frame sizes.
+    Recorded “yes” and “no” both opened the gate. These checks used recorded
+    PCM. Live headset performance still needs a field check. Horns and nearby
+    voices can pass. Quiet, level speech and very short interruptions can be
+    missed.
 - **Meter:** the bars follow the mic. They are faint while the gate keeps the
   sound out and full while Phreak hears speech, so a dead mic (flat) differs
   from filtered noise (faint).
