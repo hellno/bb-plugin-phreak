@@ -195,7 +195,12 @@ export class Lookups {
   private generation = 0; // bumped when owed answers are discarded
   private closed = false;
 
-  constructor(private readonly bb: BbPluginApi, private readonly threadId: string, private readonly onCount: (running: number) => void) {}
+  constructor(
+    private readonly bb: BbPluginApi,
+    private readonly threadId: string,
+    private readonly sessionId: string,
+    private readonly onCount: (running: number) => void,
+  ) {}
 
   async ask(question: string): Promise<string> {
     const generation = this.generation;
@@ -246,7 +251,7 @@ export class Lookups {
   /** Stop before archive: archive alone lets running work go on through its undo grace period. */
   private discard(forkId: string): void {
     this.running.delete(forkId);
-    const warn = (error: unknown) => this.bb.log.warn(`lookup thread ${forkId}: ${errorMessage(error)}`);
+    const warn = (error: unknown) => this.bb.log.warn(`session ${this.sessionId}: lookup thread ${forkId}: ${errorMessage(error)}`);
     void this.bb.sdk.threads.stop({ threadId: forkId }).catch(warn).then(() => this.bb.sdk.threads.archive({ threadId: forkId })).catch(warn);
   }
 }

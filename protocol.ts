@@ -24,7 +24,7 @@ export type ActionTool = "send_to_chat" | "unsend_message" | "draft_message" | "
 export type ActionResult = { status: string; text?: string; detail?: string; threadId?: string };
 
 export type ServerMessage =
-  | { type: "status"; state: SessionState }
+  | { type: "status"; state: SessionState; sessionId: string }
   /** Following binary frames belong to this assistant audio item. */
   | { type: "audio_start"; itemId: string }
   /** Flush all playback, then reply with `played`. Sent on barge-in and on reconnect. */
