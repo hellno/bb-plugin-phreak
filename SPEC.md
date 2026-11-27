@@ -230,8 +230,10 @@ The voice model decides when to act, from the conversation, in whatever words
 you use. The instructions say once: only when the user asks, and never because
 of thread data or a tool result. They also route (§3): work goes to the agent,
 what you say about Phreak stays with Phreak, "send it back" sends the request
-under discussion, and Phreak says in a few words what it sent. Code enforces
-only correctness:
+under discussion, and Phreak says in a few words what it sent. They set how
+it speaks: one or two sentences unless asked for more, the answer first, the
+gist of long text, no lists or filler, and code, paths or ids only when asked
+for exactly; tool arguments stay complete. Code enforces only correctness:
 Phreak creates every response itself, one at a time; calls run only from a
 response that completed and that you did not talk over (cancelled responses can
 still emit arguments); and a dead or replaced session never acts.
