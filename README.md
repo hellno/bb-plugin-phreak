@@ -83,10 +83,11 @@ minutes, or reach 60 minutes.
 - **State:** a chip beside the buttons says Connecting, Listening, Muted,
   Thinking, Looking up, Speaking, Reconnecting or Ended. A soft pulse means a
   reply is on its way; a quiet double tick, a lookup is running.
-- **Mic bars:** they follow your mic. Faint bars are sound Phreak ignores as
-  noise; full bars are speech it hears. Phreak filters out steady noise,
-  typing and knocks. While it talks, only a clear voice at speaking volume
-  cuts it off, so speak up to interrupt; a loud voice nearby can still pass.
+- **Mic bars:** faint bars show sound the gate is holding back. Full bars show
+  audio reaching Phreak. To talk over a reply, speak at your normal headset
+  volume. The gate checks for voicing and changes in loudness to screen out
+  clothing rustle and passing traffic. Nearby voices and some horns can still
+  get through.
 - **Captions:** Phreak's words appear as it speaks. Yours appear as a "You …"
   line the moment you start talking and fill in once you pause.
 - **Latency:** turn on **Show reply latency** in Phreak's settings, or run
