@@ -195,7 +195,7 @@ class Session {
     readonly threadId: string,
     private readonly registry: { live: Session | null },
   ) {
-    this.lookups = new Lookups(bb, threadId, (running) => this.toBrowser({ type: "lookups", running }));
+    this.lookups = new Lookups(bb, threadId, this.id, (running) => this.toBrowser({ type: "lookups", running }));
     this.target = {
       threadId,
       queued: [],

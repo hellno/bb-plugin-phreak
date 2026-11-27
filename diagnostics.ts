@@ -22,6 +22,7 @@ export function sessionDebug(threadId: string, started: Date, sessionId: string 
   const lines = [
     "Phreak voice session",
     `Thread: ${threadId}`,
+    `Browser: ${navigator.userAgent}`,
     `Started: ${started.toISOString()}`,
     `Ended: ${new Date().toISOString()}`,
     `Reason: ${reason.slice(0, 1000)}`,

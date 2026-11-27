@@ -50,7 +50,7 @@ but text only.
 | Sending | Immediately when you ask. No confirmation step. |
 | Authorization | The voice model decides from your words, in any phrasing. No phrase lists or other hardcoded gates. |
 | Reuse | bb's agents, types, validation and statuses wherever they exist, instead of Phreak's own. |
-| Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad` (low eagerness, near-field noise reduction for headsets), no persistence, one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
+| Repo | Public and lean. One setting (show latency, off by default), one voice (`marin`), `semantic_vad` (low eagerness, near-field noise reduction for headsets), one panel. No unit tests or test framework: `tsc --noEmit` and `bb plugin build` are the checks. |
 
 The MIT licence was confirmed on 2026-11-23. Proposed but not yet confirmed: the name.
 
@@ -297,9 +297,15 @@ lookup answers; mic audio passes the noise gate first (§4.2), so sound it keeps
 out goes as silence. Nothing goes out before Start. Phreak keeps no audio or
 transcript; each lookup leaves an archived hidden fork in bb.
 
+The browser tab keeps each thread's latest debug report in session storage until
+the tab closes. It contains the thread and available session ID, times, browser
+user agent, end reason, last error, and available mic name, settings, and levels.
+The mic name can identify the user. Copying writes the report to the clipboard.
+Sending it in an agent chat shares it with that agent's provider.
+
 ## 5. Not in v1
 
-Persistence and resume, overlays, push-to-talk, settings beyond latency, Phreak
+Saving and resuming conversations, overlays, push-to-talk, settings beyond latency, Phreak
 writing files or running commands itself, an API-key provider, WebRTC, unit
 tests.
 
