@@ -106,10 +106,13 @@ unchecked. Usage counts against the plan.
   - A frame counts as voice when most of it, not one click, is 12 dB over the
     floor. While Phreak is audible and for 600 ms after, it must be 18 dB over
     the floor and at least -38 dBFS: talking over Phreak takes a real voice.
-  - The gate opens on 3 loud frames among those held (5 while Phreak is
-    audible). Their levels must vary by an average of 3 dB or more between
-    successive loud frames. At least one must contain a repeating pulse in
-    the voice pitch range (two during playback). The pitch check runs on
+  - While listening, the gate needs 3 loud frames, including one with a
+    repeating pulse in the voice pitch range. During playback and its 600 ms
+    tail, the current frame and at least 4 of the preceding 5 must be loud.
+    At least 2 of these recent loud frames must contain a voice pitch. This
+    window spans 240 ms (256 ms with fallback capture). In both modes,
+    successive loud frames across the buffered onset must vary in level by
+    an average of at least 3 dB. The pitch check runs on
     loud candidates at 6 kHz after removing low-frequency rumble. The
     original mic audio stays buffered for up to 480 ms and is released when
     the gate opens, preserving the onset of speech. The gate stays
