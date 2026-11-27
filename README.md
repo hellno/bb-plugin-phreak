@@ -93,10 +93,8 @@ minutes, or reach 60 minutes.
   `bb plugin config phreak set showLatency true`.
 - **Debug a session:** after End or a failed Start, press **Copy session debug
   info** and paste it into an agent chat with a sentence about what went wrong.
-  The report includes the time, thread, end reason, last panel error, and
-  available mic statistics. Once bb accepts the session, the report also gives
+  Once the panel receives a session ID, the report gives
   the agent a command to find that session's turn counts and errors on the bb host.
-  The last report for each thread stays available in the same browser tab across refreshes.
 
 ## Privacy
 
@@ -109,6 +107,13 @@ leaves your browser; the rest goes out as silence. Nothing goes out before you
 press Start. Phreak keeps no audio or transcript; each lookup leaves an
 archived hidden thread in bb. bb's plugin log keeps, per session, the turn
 counts, your mic's name and settings, and sound levels, never words.
+
+The browser tab keeps the latest debug report for each thread in session storage
+until the tab closes. It contains the thread and available session ID, times,
+browser user agent, end reason, last error, and available mic name, settings,
+and levels. A mic name can include your name. **Copy session debug info** writes
+the report to your clipboard. If you paste and send it in an agent chat, that
+agent's provider receives the report.
 
 ## Troubleshooting
 
