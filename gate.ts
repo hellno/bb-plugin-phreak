@@ -8,6 +8,7 @@ const MARGIN_DB = 12; // above the floor to open
 const STRICT_MARGIN_DB = 18; // while Phreak is audible, and just after
 const ATTACK_FRAMES = 3; // loud frames among those held to open: ~120 ms of voice
 const STRICT_ATTACK_FRAMES = 5; // ~200 ms while Phreak is audible
+const STRICT_WINDOW_FRAMES = 6; // these five loud frames must fall within ~240 ms to interrupt
 const ATTACK_STEP_DB = 3; // average loud-frame level change, to keep steady traffic from opening the gate
 const CANDIDATE_DB = 6; // above the floor, a frame may be the start of speech and is held
 const MAX_HELD = 12; // ~480 ms of onset kept back while deciding, released on open
@@ -185,9 +186,12 @@ export class NoiseGate {
     this.quietRun = quiet ? this.quietRun + 1 : 0;
     if (this.quietRun >= QUIET_FRAMES) return this.release(false); // the sound ended without enough voice
     const loudFrames = this.held.filter((held) => held.loud);
+    // Keep the full onset for playback and for recognizing steady traffic; only recent speech can interrupt.
+    const evidence = strict ? this.held.slice(-STRICT_WINDOW_FRAMES).filter((held) => held.loud) : loudFrames;
     if (
-      loudFrames.length >= (strict ? STRICT_ATTACK_FRAMES : ATTACK_FRAMES) &&
-      loudFrames.filter((held) => held.voiced).length >= (strict ? 2 : 1) &&
+      (!strict || loud) &&
+      evidence.length >= (strict ? STRICT_ATTACK_FRAMES : ATTACK_FRAMES) &&
+      evidence.filter((held) => held.voiced).length >= (strict ? 2 : 1) &&
       meanStep(loudFrames.map((held) => held.db)) >= ATTACK_STEP_DB
     ) {
       this.open = true;
